@@ -1,4 +1,7 @@
 import streamlit as st
+st.title("Hello Chika 👋")
+st.write("App sudah jalan dengan betul 🎉")
+
 import pandas as pd
 import numpy as np
 import plotly.express as px
