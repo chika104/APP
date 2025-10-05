@@ -1,144 +1,132 @@
 import streamlit as st
-st.title("Hello Chika 👋")
-st.write("App sudah jalan dengan betul 🎉")
-
 import pandas as pd
 import numpy as np
 import plotly.express as px
-from streamlit_lottie import st_lottie
-import requests
+from sklearn.linear_model import LinearRegression
 import io
+import xlsxwriter
+from reportlab.pdfgen import canvas
 
-# =========================
-# 🔹 Load Lottie Animation
-# =========================
-def load_lottieurl(url: str):
-    r = requests.get(url)
-    if r.status_code != 200:
-        return None
-    return r.json()
+# -----------------------------
+# Page setup
+# -----------------------------
+st.set_page_config(
+    page_title="⚡ Energy Forecast Dashboard",
+    page_icon="⚡",
+    layout="wide"
+)
 
-lottie_energy = load_lottieurl("https://assets2.lottiefiles.com/packages/lf20_t24tpvcu.json")
+# -----------------------------
+# Header
+# -----------------------------
+st.title("⚡ Energy Forecast Dashboard")
+st.markdown("Selamat datang ke **Energy Forecast App**! 🎉")
+st.markdown("Upload dataset anda untuk mula membuat analisis, forecast tenaga, kos & penjimatan.")
 
-# =========================
-# 🔹 Function to create Excel bytes
-# =========================
-def excel_bytes_from_dfs(dfs: dict):
-    output = io.BytesIO()
-    with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
-        for sheet, df in dfs.items():
-            df.to_excel(writer, sheet_name=sheet, index=False)
-    return output.getvalue()
+# -----------------------------
+# Upload Dataset
+# -----------------------------
+uploaded_file = st.file_uploader("📂 Upload dataset (CSV/Excel)", type=["csv", "xlsx"])
 
-# =========================
-# 🔹 App Layout
-# =========================
-st.set_page_config(page_title="Energy Forecast Dashboard", layout="wide")
-
-# 🎬 Show animation ONCE
-if "anim_shown" not in st.session_state:
-    st.session_state.anim_shown = False
-
-if not st.session_state.anim_shown:
-    st_lottie(lottie_energy, speed=1, height=400, key="energy")
-    st.session_state.anim_shown = True
-    st.stop()
-
-st.title("⚡ Energy Forecast & Savings Dashboard")
-
-# =========================
-# 🔹 Step 1: Data Input
-# =========================
-st.header("📥 Step 1: Input Data")
-
-option = st.radio("Choose input method:", ["Manual Input", "Upload CSV"])
-
-if option == "Manual Input":
-    start_year = st.number_input("Start Year", value=2020)
-    end_year = st.number_input("End Year", value=2024)
-    years = list(range(start_year, end_year + 1))
-
-    data = []
-    for y in years:
-        consumption = st.number_input(f"Energy consumption for {y} (kWh)", min_value=0.0, value=1000.0, step=100.0)
-        cost = st.number_input(f"Total cost for {y} (RM)", min_value=0.0, value=500.0, step=50.0)
-        co2 = st.number_input(f"CO₂ emissions for {y} (kg)", min_value=0.0, value=200.0, step=10.0)
-        data.append({"year": y, "consumption": consumption, "cost": cost, "co2": co2})
-    df = pd.DataFrame(data)
-
-else:
-    uploaded_file = st.file_uploader("Upload CSV", type=["csv"])
-    if uploaded_file:
+if uploaded_file is not None:
+    # Load data
+    if uploaded_file.name.endswith(".csv"):
         df = pd.read_csv(uploaded_file)
     else:
-        st.warning("Please upload a CSV file.")
-        st.stop()
+        df = pd.read_excel(uploaded_file)
 
-st.dataframe(df)
+    st.subheader("📊 Dataset Preview")
+    st.dataframe(df.head(), use_container_width=True)
 
-# =========================
-# 🔹 Step 2: Apply Factors
-# =========================
-st.header("⚙️ Step 2: Apply Factors (Additions / Reductions)")
+    # -----------------------------
+    # Sidebar controls
+    # -----------------------------
+    st.sidebar.header("Controls")
+    n_days = st.sidebar.slider("Number of forecast days", 7, 30, 14)
+    energy_rate = st.sidebar.number_input("Energy cost per kWh (RM)", 0.1, 5.0, 0.50)
+    saving_rate = st.sidebar.slider("Expected saving rate (%)", 1, 50, 10)
 
-factors = {
-    "LED Lamp (kWh/year)": st.number_input("LED Lamp", value=0.0, step=10.0),
-    "CFL Lamp (kWh/year)": st.number_input("CFL Lamp", value=0.0, step=10.0),
-    "Fluorescent Lamp (kWh/year)": st.number_input("Fluorescent Lamp", value=0.0, step=10.0),
-    "Computers (kWh/year)": st.number_input("Computers", value=0.0, step=10.0),
-    "Lab Equipment (kWh/year)": st.number_input("Lab Equipment", value=0.0, step=10.0),
-    "Operating Hours (hours/year)": st.number_input("Operating Hours (hours/year)", value=0.0, step=10.0),
-}
+    # -----------------------------
+    # Forecasting (simple regression)
+    # -----------------------------
+    if "Energy" in df.columns:
+        X = np.arange(len(df)).reshape(-1, 1)
+        y = df["Energy"].values
+        model = LinearRegression()
+        model.fit(X, y)
 
-# Adjusted consumption
-df["adjusted_consumption"] = df["consumption"] + sum(factors.values())
+        future_x = np.arange(len(df), len(df) + n_days).reshape(-1, 1)
+        forecast = model.predict(future_x)
 
-# Adjusted cost (RM)
-cost_per_kwh = (df["cost"] / df["consumption"]).mean()
-df["adjusted_cost"] = df["adjusted_consumption"] * cost_per_kwh
+        forecast_dates = pd.date_range(start=pd.to_datetime(df.index[-1]), periods=n_days + 1, freq="D")[1:]
+        forecast_df = pd.DataFrame({"Date": forecast_dates, "Forecast_Energy": forecast})
 
-# Adjusted CO2
-co2_per_kwh = (df["co2"] / df["consumption"]).mean()
-df["adjusted_co2"] = df["adjusted_consumption"] * co2_per_kwh
+        # Combine actual + forecast
+        full_data = pd.concat([df, forecast_df.set_index("Date")], axis=0)
 
-# =========================
-# 🔹 Step 3: Forecast Graphs
-# =========================
-st.header("📊 Step 3: Forecast & Comparison Graphs")
+        # -----------------------------
+        # Plot Charts
+        # -----------------------------
+        st.subheader("📈 Energy Usage Forecast")
+        fig = px.line(full_data, x=full_data.index, y=full_data.columns[0], title="Energy Forecast (kWh)")
+        st.plotly_chart(fig, use_container_width=True)
 
-col1, col2 = st.columns(2)
+        # -----------------------------
+        # Key Metrics
+        # -----------------------------
+        st.subheader("📌 Key Metrics")
+        total_actual_energy = df["Energy"].sum()
+        forecast_energy = forecast.sum()
+        total_cost = total_actual_energy * energy_rate
+        forecast_cost = forecast_energy * energy_rate
+        saving_estimate = forecast_cost * (saving_rate / 100)
 
-with col1:
-    st.subheader("Graph 1: Baseline vs Adjusted Consumption")
-    fig1 = px.line(df, x="year", y=["consumption", "adjusted_consumption"], markers=True)
-    st.plotly_chart(fig1, use_container_width=True)
+        col1, col2, col3 = st.columns(3)
+        col1.metric("⚡ Total Energy (kWh)", f"{total_actual_energy:,.2f}")
+        col2.metric("💰 Total Cost (RM)", f"{total_cost:,.2f}")
+        col3.metric("✅ Potential Saving (RM)", f"{saving_estimate:,.2f}")
 
-with col2:
-    st.subheader("Graph 2: Baseline vs Adjusted Cost")
-    fig2 = px.line(df, x="year", y=["cost", "adjusted_cost"], markers=True)
-    st.plotly_chart(fig2, use_container_width=True)
+        # -----------------------------
+        # Download Reports
+        # -----------------------------
+        st.subheader("📥 Download Reports")
 
-col3, col4 = st.columns(2)
+        # Excel
+        output = io.BytesIO()
+        with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
+            df.to_excel(writer, index=False, sheet_name="Actual Data")
+            forecast_df.to_excel(writer, index=False, sheet_name="Forecast")
+        excel_data = output.getvalue()
 
-with col3:
-    st.subheader("Graph 3: Baseline vs Adjusted Energy Saving (kWh)")
-    df["saving_kwh"] = df["consumption"] - df["adjusted_consumption"]
-    fig3 = px.bar(df, x="year", y="saving_kwh", color="saving_kwh")
-    st.plotly_chart(fig3, use_container_width=True)
+        st.download_button(
+            label="📊 Download Excel Report",
+            data=excel_data,
+            file_name="energy_forecast.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
 
-with col4:
-    st.subheader("Graph 4: Baseline vs Adjusted CO₂ Reduction (kg)")
-    df["saving_co2"] = df["co2"] - df["adjusted_co2"]
-    fig4 = px.bar(df, x="year", y="saving_co2", color="saving_co2")
-    st.plotly_chart(fig4, use_container_width=True)
+        # PDF
+        pdf_output = io.BytesIO()
+        c = canvas.Canvas(pdf_output)
+        c.setFont("Helvetica", 12)
+        c.drawString(100, 800, "Energy Forecast Report")
+        c.drawString(100, 780, f"Total Actual Energy: {total_actual_energy:,.2f} kWh")
+        c.drawString(100, 760, f"Forecasted Next {n_days} Days: {forecast_energy:,.2f} kWh")
+        c.drawString(100, 740, f"Total Cost: RM {total_cost:,.2f}")
+        c.drawString(100, 720, f"Forecast Cost (Next {n_days} Days): RM {forecast_cost:,.2f}")
+        c.drawString(100, 700, f"Estimated Saving ({saving_rate}%): RM {saving_estimate:,.2f}")
+        c.showPage()
+        c.save()
+        pdf_output.seek(0)
 
-# =========================
-# 🔹 Step 4: Download Results
-# =========================
-st.header("📥 Step 4: Download Results")
+        st.download_button(
+            label="📑 Download PDF Report",
+            data=pdf_output,
+            file_name="energy_forecast.pdf",
+            mime="application/pdf"
+        )
 
-all_dfs = {"Forecast Results": df}
-excel_bytes = excel_bytes_from_dfs(all_dfs)
-st.download_button("Download Excel", data=excel_bytes, file_name="forecast_results.xlsx")
-
-st.success("✅ Analysis Complete! You can now download results.")
+    else:
+        st.error("⚠️ Column `Energy` tidak dijumpai dalam dataset. Pastikan dataset ada column bernama `Energy`.")
+else:
+    st.info("⬆️ Upload dataset anda untuk mula.")
