@@ -3,130 +3,115 @@ import pandas as pd
 import numpy as np
 import plotly.express as px
 from sklearn.linear_model import LinearRegression
-import io
+from sklearn.metrics import mean_squared_error
+from io import BytesIO
 import xlsxwriter
-from reportlab.pdfgen import canvas
 
-# -----------------------------
-# Page setup
-# -----------------------------
-st.set_page_config(
-    page_title="⚡ Energy Forecast Dashboard",
-    page_icon="⚡",
-    layout="wide"
+# ==============================
+# 🧭 APP CONFIGURATION
+# ==============================
+st.set_page_config(page_title="Energy Forecast Dashboard", page_icon="⚡", layout="wide")
+
+st.title("⚡ Energy Forecast Dashboard")
+st.write("Selamat datang ke aplikasi ramalan tenaga. Anda boleh pilih untuk **upload dataset CSV** atau **masukkan data manual** untuk meramal penggunaan tenaga.")
+
+# ==============================
+# 🔧 PILIHAN INPUT
+# ==============================
+option = st.radio(
+    "Pilih cara untuk masukkan data:",
+    ["Upload CSV", "Masukkan Data Manual"]
 )
 
-# -----------------------------
-# Header
-# -----------------------------
-st.title("⚡ Energy Forecast Dashboard")
-st.markdown("Selamat datang ke **Energy Forecast App**! 🎉")
-st.markdown("Upload dataset anda untuk mula membuat analisis, forecast tenaga, kos & penjimatan.")
+# ==============================
+# 🧮 FUNGSI RAMALAN
+# ==============================
+def run_forecast(df):
+    # Pastikan dataset ada dua kolum minimum
+    if df.shape[1] < 2:
+        st.error("Dataset mesti ada sekurang-kurangnya dua kolum (contoh: 'Masa' dan 'Tenaga').")
+        return None
 
-# -----------------------------
-# Upload Dataset
-# -----------------------------
-uploaded_file = st.file_uploader("📂 Upload dataset (CSV/Excel)", type=["csv", "xlsx"])
+    df.columns = ['Time', 'Energy']  # standardize columns
+    df = df.dropna()
 
-if uploaded_file is not None:
-    # Load data
-    if uploaded_file.name.endswith(".csv"):
-        df = pd.read_csv(uploaded_file)
-    else:
-        df = pd.read_excel(uploaded_file)
+    # Feature & target
+    X = np.array(range(len(df))).reshape(-1, 1)
+    y = df['Energy'].values
 
-    st.subheader("📊 Dataset Preview")
-    st.dataframe(df.head(), use_container_width=True)
+    model = LinearRegression()
+    model.fit(X, y)
 
-    # -----------------------------
-    # Sidebar controls
-    # -----------------------------
-    st.sidebar.header("Controls")
-    n_days = st.sidebar.slider("Number of forecast days", 7, 30, 14)
-    energy_rate = st.sidebar.number_input("Energy cost per kWh (RM)", 0.1, 5.0, 0.50)
-    saving_rate = st.sidebar.slider("Expected saving rate (%)", 1, 50, 10)
+    y_pred = model.predict(X)
+    mse = mean_squared_error(y, y_pred)
 
-    # -----------------------------
-    # Forecasting (simple regression)
-    # -----------------------------
-    if "Energy" in df.columns:
-        X = np.arange(len(df)).reshape(-1, 1)
-        y = df["Energy"].values
-        model = LinearRegression()
-        model.fit(X, y)
+    # Ramalan masa depan (5 step)
+    future_steps = 5
+    future_X = np.array(range(len(df), len(df) + future_steps)).reshape(-1, 1)
+    future_pred = model.predict(future_X)
 
-        future_x = np.arange(len(df), len(df) + n_days).reshape(-1, 1)
-        forecast = model.predict(future_x)
+    # Gabungkan hasil ramalan
+    future_df = pd.DataFrame({
+        'Time': [f'Future {i+1}' for i in range(future_steps)],
+        'Predicted Energy': future_pred
+    })
 
-        forecast_dates = pd.date_range(start=pd.to_datetime(df.index[-1]), periods=n_days + 1, freq="D")[1:]
-        forecast_df = pd.DataFrame({"Date": forecast_dates, "Forecast_Energy": forecast})
+    # Paparan graf
+    fig = px.line(df, x='Time', y='Energy', title="📊 Data Sebenar vs Ramalan")
+    fig.add_scatter(x=df['Time'], y=y_pred, mode='lines', name='Predicted (Training)', line=dict(dash='dot'))
+    fig.add_scatter(x=future_df['Time'], y=future_df['Predicted Energy'], mode='lines+markers', name='Forecast (Next 5)', line=dict(color='orange'))
 
-        # Combine actual + forecast
-        full_data = pd.concat([df, forecast_df.set_index("Date")], axis=0)
+    st.plotly_chart(fig, use_container_width=True)
+    st.success(f"✅ Model Linear Regression siap dilatih — MSE: {mse:.4f}")
 
-        # -----------------------------
-        # Plot Charts
-        # -----------------------------
-        st.subheader("📈 Energy Usage Forecast")
-        fig = px.line(full_data, x=full_data.index, y=full_data.columns[0], title="Energy Forecast (kWh)")
-        st.plotly_chart(fig, use_container_width=True)
+    # Paparan hasil
+    st.subheader("📈 Hasil Ramalan:")
+    st.dataframe(future_df)
 
-        # -----------------------------
-        # Key Metrics
-        # -----------------------------
-        st.subheader("📌 Key Metrics")
-        total_actual_energy = df["Energy"].sum()
-        forecast_energy = forecast.sum()
-        total_cost = total_actual_energy * energy_rate
-        forecast_cost = forecast_energy * energy_rate
-        saving_estimate = forecast_cost * (saving_rate / 100)
+    # Fungsi muat turun hasil ke Excel
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+        df.to_excel(writer, sheet_name='Data Asal', index=False)
+        future_df.to_excel(writer, sheet_name='Ramalan', index=False)
+    st.download_button(
+        label="💾 Muat Turun Hasil Ramalan (Excel)",
+        data=output.getvalue(),
+        file_name="energy_forecast.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
 
-        col1, col2, col3 = st.columns(3)
-        col1.metric("⚡ Total Energy (kWh)", f"{total_actual_energy:,.2f}")
-        col2.metric("💰 Total Cost (RM)", f"{total_cost:,.2f}")
-        col3.metric("✅ Potential Saving (RM)", f"{saving_estimate:,.2f}")
+# ==============================
+# 📂 UPLOAD CSV
+# ==============================
+if option == "Upload CSV":
+    uploaded_file = st.file_uploader("Muat naik fail CSV anda", type=["csv"])
+    if uploaded_file:
+        try:
+            df = pd.read_csv(uploaded_file)
+            st.subheader("📊 Pratonton Data")
+            st.dataframe(df.head())
+            run_forecast(df)
+        except Exception as e:
+            st.error(f"Ralat semasa membaca fail CSV: {e}")
 
-        # -----------------------------
-        # Download Reports
-        # -----------------------------
-        st.subheader("📥 Download Reports")
+# ==============================
+# ✍️ INPUT MANUAL
+# ==============================
+elif option == "Masukkan Data Manual":
+    st.subheader("Masukkan Data Penggunaan Tenaga")
+    n = st.number_input("Berapa banyak rekod yang ingin dimasukkan?", min_value=3, max_value=50, value=5, step=1)
 
-        # Excel
-        output = io.BytesIO()
-        with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
-            df.to_excel(writer, index=False, sheet_name="Actual Data")
-            forecast_df.to_excel(writer, index=False, sheet_name="Forecast")
-        excel_data = output.getvalue()
+    manual_data = []
+    for i in range(n):
+        col1, col2 = st.columns(2)
+        with col1:
+            time = st.text_input(f"Masa {i+1}", value=f"T{i+1}")
+        with col2:
+            energy = st.number_input(f"Tenaga {i+1} (kWh)", value=float(i+1) * 10.0)
+        manual_data.append({"Time": time, "Energy": energy})
 
-        st.download_button(
-            label="📊 Download Excel Report",
-            data=excel_data,
-            file_name="energy_forecast.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
-
-        # PDF
-        pdf_output = io.BytesIO()
-        c = canvas.Canvas(pdf_output)
-        c.setFont("Helvetica", 12)
-        c.drawString(100, 800, "Energy Forecast Report")
-        c.drawString(100, 780, f"Total Actual Energy: {total_actual_energy:,.2f} kWh")
-        c.drawString(100, 760, f"Forecasted Next {n_days} Days: {forecast_energy:,.2f} kWh")
-        c.drawString(100, 740, f"Total Cost: RM {total_cost:,.2f}")
-        c.drawString(100, 720, f"Forecast Cost (Next {n_days} Days): RM {forecast_cost:,.2f}")
-        c.drawString(100, 700, f"Estimated Saving ({saving_rate}%): RM {saving_estimate:,.2f}")
-        c.showPage()
-        c.save()
-        pdf_output.seek(0)
-
-        st.download_button(
-            label="📑 Download PDF Report",
-            data=pdf_output,
-            file_name="energy_forecast.pdf",
-            mime="application/pdf"
-        )
-
-    else:
-        st.error("⚠️ Column `Energy` tidak dijumpai dalam dataset. Pastikan dataset ada column bernama `Energy`.")
-else:
-    st.info("⬆️ Upload dataset anda untuk mula.")
+    if st.button("Jalankan Ramalan 🔮"):
+        df_manual = pd.DataFrame(manual_data)
+        st.subheader("📊 Data Manual Dimasukkan")
+        st.dataframe(df_manual)
+        run_forecast(df_manual)
