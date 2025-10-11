@@ -3,170 +3,217 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.express as px
-import plotly.graph_objects as go
-from datetime import datetime, timedelta
+import io
 
-# --- PAGE CONFIG ---
-st.set_page_config(
-    page_title="Smart Energy Forecast Dashboard",
-    page_icon="⚡",
-    layout="wide"
+# ---------------------------------------------------------------------
+# PAGE CONFIG & STYLING
+# ---------------------------------------------------------------------
+st.set_page_config(page_title="Smart Energy Forecasting System", layout="wide")
+
+page_bg_img = """
+<style>
+[data-testid="stAppViewContainer"] {
+    background-image: url("https://images.unsplash.com/photo-1509395176047-4a66953fd231");
+    background-size: cover;
+    background-position: center;
+    background-repeat: no-repeat;
+}
+[data-testid="stHeader"] {
+    background: rgba(0,0,0,0);
+}
+[data-testid="stSidebar"] {
+    background-color: rgba(255,255,255,0.8);
+}
+h1, h2, h3 {
+    color: #023047;
+}
+</style>
+"""
+st.markdown(page_bg_img, unsafe_allow_html=True)
+
+# ---------------------------------------------------------------------
+# SIDEBAR NAVIGATION
+# ---------------------------------------------------------------------
+st.sidebar.title("⚡ Smart Energy Forecasting System")
+menu = st.sidebar.radio(
+    "Navigation",
+    ["🏠 Dashboard", "📊 Energy Forecast", "💡 Device Management",
+     "📈 Reports", "⚙️ Settings", "❓ Help & About"]
 )
 
-# --- CUSTOM CSS ---
-st.markdown("""
-    <style>
-    .main {
-        background: #0f1116;
-        color: #fff;
-    }
-    h1, h2, h3 {
-        color: #00c8ff;
-    }
-    .stButton>button {
-        background-color: #00c8ff;
-        color: white;
-        border-radius: 10px;
-        transition: 0.3s;
-    }
-    .stButton>button:hover {
-        background-color: #0093cc;
-        transform: scale(1.05);
-    }
-    </style>
-""", unsafe_allow_html=True)
-
-# --- SIDEBAR NAVIGATION ---
-st.sidebar.title("⚙️ App Navigation")
-menu = st.sidebar.radio("Select Page:", [
-    "🏠 Dashboard",
-    "🔋 Energy Forecast",
-    "💡 Device Management",
-    "📊 Reports",
-    "⚙️ Settings",
-    "❓ Help & About"
-])
-
-# --- DASHBOARD PAGE ---
+# ---------------------------------------------------------------------
+# DASHBOARD PAGE
+# ---------------------------------------------------------------------
 if menu == "🏠 Dashboard":
-    st.title("⚡ Smart Energy Dashboard")
-    st.markdown("Welcome **Chika!** 👋 This is your live energy monitoring and forecasting platform.")
-    
-    # Sample summary cards
-    col1, col2, col3, col4 = st.columns(4)
-    col1.metric("Current Usage (kWh)", "245", "+3%")
-    col2.metric("Predicted Tomorrow (kWh)", "252", "↑ 7")
-    col3.metric("Monthly Cost (RM)", "128.50", "↓ RM2.30")
-    col4.metric("CO₂ Emissions (kg)", "56.3", "+0.5%")
-    
-    st.markdown("---")
-    st.subheader("📈 Energy Usage Over Time")
-    
-    date_rng = pd.date_range(datetime.now() - timedelta(days=30), periods=30)
-    usage = np.random.randint(200, 280, 30)
-    fig = px.line(x=date_rng, y=usage, markers=True, title="Energy Usage (Last 30 Days)", 
-                  labels={'x': 'Date', 'y': 'Energy (kWh)'})
-    fig.update_traces(line_color='#00c8ff')
-    st.plotly_chart(fig, use_container_width=True)
+    st.title("🏠 Dashboard")
+    st.markdown("""
+    Selamat datang ke **Smart Energy Forecasting System** 💡  
+    Sistem ini membantu anda:
+    - Menganalisis dan meramal penggunaan tenaga.
+    - Menilai potensi penjimatan kos & pengurangan karbon.
+    - Mengurus peranti dan menjana laporan secara interaktif.
+    """)
+    st.success("Pilih menu di sebelah kiri untuk mula menggunakan aplikasi ini 🚀")
 
+# ---------------------------------------------------------------------
+# ENERGY FORECAST PAGE
+# ---------------------------------------------------------------------
+elif menu == "📊 Energy Forecast":
+    st.title("📊 Energy Forecast Module")
+    st.markdown("Ramalkan penggunaan tenaga & kos berdasarkan data sejarah 🔍")
 
-# --- ENERGY FORECAST PAGE ---
-elif menu == "🔋 Energy Forecast":
-    st.title("🔋 Energy Forecasting System")
+    # ---------------------------
+    # Utility functions
+    # ---------------------------
+    def normalize_cols(df):
+        df.columns = [str(c).strip().lower().replace(" ", "_") for c in df.columns]
+        return df
 
-    # Step 1: Choose Input Method
-    st.subheader("Step 1: Choose Input Method")
-    input_method = st.radio("Select Input Type:", ["Manual Entry", "Upload CSV"])
-    
-    if input_method == "Manual Entry":
-        days = st.slider("Number of Days to Forecast:", 7, 60, 30)
-        base_energy = st.number_input("Baseline Daily Energy (kWh)", 100, 1000, 250)
-        data = pd.DataFrame({
-            "Date": pd.date_range(datetime.now(), periods=days),
-            "Baseline": np.linspace(base_energy, base_energy + 20, days)
-        })
-    else:
-        uploaded_file = st.file_uploader("Upload your CSV file", type=["csv"])
-        if uploaded_file is not None:
-            data = pd.read_csv(uploaded_file)
-            st.success("✅ File successfully uploaded!")
-        else:
-            st.warning("Please upload a CSV to proceed.")
-            st.stop()
+    def safe_to_numeric_series(s):
+        return pd.to_numeric(s, errors="coerce")
 
-    # Step 2: Adjust Factors
-    st.subheader("Step 2: Adjust Energy Factors ⚙️")
-    col1, col2, col3, col4 = st.columns(4)
-    light_factor = col1.slider("💡 Lights", -50, 50, 0, step=5)
-    comp_factor = col2.slider("💻 Computers", -50, 50, 0, step=5)
-    lab_factor = col3.slider("⚗️ Lab Equipment", -50, 50, 0, step=5)
-    hour_factor = col4.slider("⏱️ Operating Hours", -50, 50, 0, step=5)
+    # ---------------------------
+    # Step 1: Input data
+    # ---------------------------
+    st.header("Step 1 — Input Baseline Data")
+    input_mode = st.radio("Input Method", ("Upload CSV", "Manual Entry"))
 
-    # Calculate Adjusted Forecast
-    adj_factor = 1 + (light_factor + comp_factor + lab_factor + hour_factor) / 400
-    data["Adjusted"] = data["Baseline"] * adj_factor
-    data["Cost"] = data["Adjusted"] * 0.52  # RM0.52 per kWh
-    data["CO2"] = data["Adjusted"] * 0.233  # kg CO₂ per kWh
+    df = None
+    if input_mode == "Upload CSV":
+        uploaded = st.file_uploader("Upload CSV (columns: year, consumption, [optional baseline cost])", type=["csv", "xlsx"])
+        if uploaded is not None:
+            if uploaded.name.lower().endswith(".csv"):
+                df_raw = pd.read_csv(uploaded)
+            else:
+                df_raw = pd.read_excel(uploaded)
+            df_raw = normalize_cols(df_raw)
 
-    st.markdown("---")
+            year_col = [c for c in df_raw.columns if "year" in c][0]
+            cons_col = [c for c in df_raw.columns if any(k in c for k in ["consum", "kwh", "energy"])][0]
 
-    # Step 3: Graphs
-    st.subheader("📊 Scenario Comparison")
-    tab1, tab2, tab3, tab4 = st.tabs(["Baseline Forecast", "Adjusted Forecast", "Cost Trend", "CO₂ Trend"])
+            df = df_raw[[year_col, cons_col]].copy()
+            df.columns = ["year", "consumption"]
+
+            if any("cost" in c for c in df_raw.columns):
+                cost_col = [c for c in df_raw.columns if "cost" in c][0]
+                df["baseline_cost"] = pd.to_numeric(df_raw[cost_col], errors="coerce")
+            else:
+                df["baseline_cost"] = np.nan
+
+    elif input_mode == "Manual Entry":
+        rows = st.number_input("How many historical rows?", min_value=1, max_value=20, value=5)
+        years, consumptions, baseline_costs = [], [], []
+        for i in range(int(rows)):
+            c1, c2 = st.columns(2)
+            with c1:
+                y = st.number_input(f"Year {i+1}", min_value=2000, max_value=2100, value=2020+i, key=f"y{i}")
+                years.append(y)
+            with c2:
+                c = st.number_input(f"Consumption kWh ({y})", min_value=0.0, value=10000.0, key=f"c{i}")
+                consumptions.append(c)
+            b = st.number_input(f"Baseline cost RM ({y}) (optional)", min_value=0.0, value=0.0, key=f"b{i}")
+            baseline_costs.append(b if b > 0 else np.nan)
+        df = pd.DataFrame({"year": years, "consumption": consumptions, "baseline_cost": baseline_costs})
+
+    if df is None or df.empty:
+        st.warning("⚠️ Please upload or enter data to continue.")
+        st.stop()
+
+    df["year"] = df["year"].astype(int)
+    df["consumption"] = safe_to_numeric_series(df["consumption"])
+    df["baseline_cost"] = safe_to_numeric_series(df["baseline_cost"])
+    df = df.sort_values("year").reset_index(drop=True)
+
+    st.dataframe(df)
+
+    # ---------------------------
+    # Step 2: Baseline
+    # ---------------------------
+    st.header("Step 2 — Baseline Calculations")
+    tariff = st.number_input("Enter tariff (RM/kWh)", min_value=0.0, value=0.5, step=0.01)
+
+    df["baseline_cost"] = df["baseline_cost"].fillna(df["consumption"] * tariff)
+    df["baseline_energy_saving"] = 0.0
+    df["baseline_cost_saving"] = 0.0
+    df["baseline_co2_reduction"] = 0.0
+    st.success("Baseline calculated ✅")
+
+    # ---------------------------
+    # Step 3: Adjusted Scenario
+    # ---------------------------
+    st.header("Step 3 — Adjusted Scenario")
+    reduction_pct = st.slider("Reduction percentage (%)", 0, 100, 10)
+
+    df["adjusted_consumption"] = df["consumption"] * (1 - reduction_pct/100)
+    df["adjusted_cost"] = df["adjusted_consumption"] * tariff
+    df["adjusted_energy_saving"] = df["consumption"] - df["adjusted_consumption"]
+    df["adjusted_cost_saving"] = df["baseline_cost"] - df["adjusted_cost"]
+    df["adjusted_co2_reduction"] = df["adjusted_energy_saving"] * 0.00069
+
+    st.balloons()
+
+    # ---------------------------
+    # Step 4: Visualization
+    # ---------------------------
+    st.header("Step 4 — Visualization")
+
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+        "Consumption", "Cost", "Energy Saving", "Cost Saving", "CO₂ Reduction"
+    ])
 
     with tab1:
-        fig1 = px.line(data, x="Date", y="Baseline", title="Baseline Forecast (kWh)",
-                       line_shape="spline", markers=True)
-        fig1.update_traces(line_color="#0077ff")
-        st.plotly_chart(fig1, use_container_width=True)
+        st.subheader("Baseline vs Adjusted Consumption")
+        fig = px.line(df, x="year", y=["consumption", "adjusted_consumption"], markers=True)
+        st.plotly_chart(fig, use_container_width=True)
 
     with tab2:
-        fig2 = px.line(data, x="Date", y="Adjusted", title="Forecast with Adjusted Factors",
-                       line_shape="spline", markers=True, color_discrete_sequence=["#00ff88"])
-        st.plotly_chart(fig2, use_container_width=True)
+        st.subheader("Baseline vs Adjusted Cost")
+        fig = px.line(df, x="year", y=["baseline_cost", "adjusted_cost"], markers=True)
+        st.plotly_chart(fig, use_container_width=True)
 
     with tab3:
-        fig3 = px.bar(data, x="Date", y="Cost", title="Energy Cost Trend (RM)", color="Cost",
-                      color_continuous_scale="viridis")
-        st.plotly_chart(fig3, use_container_width=True)
+        st.subheader("Energy Saving (kWh)")
+        fig = px.bar(df, x="year", y="adjusted_energy_saving")
+        st.plotly_chart(fig, use_container_width=True)
 
     with tab4:
-        fig4 = go.Figure()
-        fig4.add_trace(go.Scatter(x=data["Date"], y=data["CO2"], mode="lines+markers", line=dict(color="orange")))
-        fig4.update_layout(title="CO₂ Emission Trend (kg)", xaxis_title="Date", yaxis_title="CO₂ (kg)")
-        st.plotly_chart(fig4, use_container_width=True)
+        st.subheader("Cost Saving (RM)")
+        fig = px.bar(df, x="year", y="adjusted_cost_saving")
+        st.plotly_chart(fig, use_container_width=True)
 
+    with tab5:
+        st.subheader("CO₂ Reduction")
+        fig = px.bar(df, x="year", y="adjusted_co2_reduction")
+        st.plotly_chart(fig, use_container_width=True)
 
-# --- DEVICE MANAGEMENT PAGE ---
+# ---------------------------------------------------------------------
+# DEVICE MANAGEMENT PAGE
+# ---------------------------------------------------------------------
 elif menu == "💡 Device Management":
     st.title("💡 Device Management")
-    st.info("This section allows you to add, monitor, and control your connected devices.")
-    st.write("Coming soon: device monitoring API integration.")
+    st.info("Feature coming soon: Manage your connected IoT devices, status, and energy usage.")
 
+# ---------------------------------------------------------------------
+# REPORTS PAGE
+# ---------------------------------------------------------------------
+elif menu == "📈 Reports":
+    st.title("📈 Reports")
+    st.info("Generate and download customized energy reports in PDF or Excel format (coming soon).")
 
-# --- REPORTS PAGE ---
-elif menu == "📊 Reports":
-    st.title("📊 Reports & Analytics")
-    st.write("Generate detailed monthly or custom period energy usage reports.")
-    st.write("Feature in development — CSV and PDF exports will be available here.")
-
-
-# --- SETTINGS PAGE ---
+# ---------------------------------------------------------------------
+# SETTINGS PAGE
+# ---------------------------------------------------------------------
 elif menu == "⚙️ Settings":
-    st.title("⚙️ Application Settings")
-    st.write("Adjust preferences, themes, and configurations here.")
-    theme = st.selectbox("Choose Theme:", ["Dark", "Light", "Auto"])
-    st.success(f"Theme set to {theme} mode ✅")
+    st.title("⚙️ Settings")
+    st.info("Adjust system configurations and preferences.")
 
-
-# --- HELP & ABOUT PAGE ---
+# ---------------------------------------------------------------------
+# HELP & ABOUT PAGE
+# ---------------------------------------------------------------------
 elif menu == "❓ Help & About":
     st.title("❓ Help & About")
-    st.write("""
-        **Smart Energy Forecast App v2.0**
-        - Developed by Chika 💻  
-        - Built with Streamlit + Plotly  
-        - Interactive forecasting with scenario comparison  
-        - Version: October 2025
+    st.markdown("""
+    **Smart Energy Forecasting System**  
+    Version 1.0 — Developed by Chika 💻  
+    This system utilizes data-driven analysis to predict and visualize energy consumption trends.
     """)
-    st.markdown("If you encounter issues, please contact [support@example.com](mailto:support@example.com)")
