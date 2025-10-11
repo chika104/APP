@@ -9,3 +9,4 @@ reportlab
 scikit-learn
 requests
 streamlit-lottie
+kaleido
