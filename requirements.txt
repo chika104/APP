@@ -10,3 +10,4 @@ scikit-learn
 requests
 streamlit-lottie
 kaleido
+mysql-connector-python
