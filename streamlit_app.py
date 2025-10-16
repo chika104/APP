@@ -31,11 +31,11 @@ st.markdown("""
 def get_connection():
     try:
         conn = mysql.connector.connect(
-            host=" containers-us-west-23.railway.app ",   # 🟢 Ganti ikut info Railway
+            host="switchback.proxy.rlwy.net",   # 🟢 Ganti ikut info Railway
             user="root",
             password="polrwgDJZnGLaungxPtGkOTaduCuolEj",             # 🟢 Ganti password kamu
             database="railway",
-            port=3306
+            port=55398
         )
         return conn
     except Error as e:
