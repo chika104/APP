@@ -3,219 +3,210 @@ import pandas as pd
 import numpy as np
 import plotly.express as px
 import mysql.connector
-from mysql.connector import Error
 import io
+from datetime import datetime
 import base64
+from reportlab.lib.pagesizes import letter
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table
+from reportlab.lib.styles import getSampleStyleSheet
 
-# -----------------------------
-# PAGE CONFIG & STYLE
-# -----------------------------
-st.set_page_config(page_title="Energy Forecast Dashboard", layout="wide")
+# ------------------------------------------------------
+# PAGE CONFIG
+# ------------------------------------------------------
+st.set_page_config(page_title="Smart Energy Forecasting Dashboard", layout="wide")
 
-st.markdown("""
+# ------------------------------------------------------
+# DATABASE CONNECTION (XAMPP MySQL)
+# ------------------------------------------------------
+def get_db_connection():
+    return mysql.connector.connect(
+        host="localhost",
+        user="root",
+        password="",
+        database="energy_forecast_db"
+    )
+
+# ------------------------------------------------------
+# STYLING
+# ------------------------------------------------------
+theme = st.sidebar.radio("🎨 Choose Theme", ["Dark", "Light"])
+if theme == "Dark":
+    st.markdown("""
     <style>
-    body {
-        background-color: #0E1117;
-        color: white;
-    }
-    .stApp {
-        background-color: #0E1117;
-        color: white;
-    }
+    [data-testid="stAppViewContainer"] { background-color: #0e1117; color: white; }
+    [data-testid="stSidebar"] { background-color: #1e1e1e; color: white; }
     </style>
-""", unsafe_allow_html=True)
+    """, unsafe_allow_html=True)
+else:
+    st.markdown("""
+    <style>
+    [data-testid="stAppViewContainer"] { background-color: #f4f4f4; color: black; }
+    [data-testid="stSidebar"] { background-color: #ffffff; color: black; }
+    </style>
+    """, unsafe_allow_html=True)
 
-# -----------------------------
-# DATABASE CONNECTION
-# -----------------------------
-def get_connection():
-    try:
-        conn = mysql.connector.connect(
-            host="containers-us-east-123.railway.app",   # 🟢 Ganti ikut info Railway
-            user="root",
-            password="polrwgDJZnGLaungxPtGkOTaduCuolEj",             # 🟢 Ganti password kamu
-            database="railway",
-            port=3306
-        )
-        return conn
-    except Error as e:
-        st.error(f"❌ Database connection failed: {e}")
-        return None
-
-# -----------------------------
-# SIDEBAR NAVIGATION
-# -----------------------------
+# ------------------------------------------------------
+# NAVIGATION MENU
+# ------------------------------------------------------
 menu = st.sidebar.radio(
-    "📘 Main Menu",
-    ["🏠 Dashboard", "⚡ Energy Forecast", "🔌 Device Management", "📊 Reports", "⚙️ Settings", "❓ Help & About"]
+    "📍 Navigation",
+    ["🏠 Dashboard", "🔋 Energy Forecast", "🧠 Device Management", "📈 Reports", "⚙️ Settings", "❓ Help & About"]
 )
 
-# -----------------------------
+# ------------------------------------------------------
 # DASHBOARD
-# -----------------------------
+# ------------------------------------------------------
 if menu == "🏠 Dashboard":
-    st.title("🏠 Energy Dashboard Overview")
-    st.write("Welcome to the Smart Energy Forecasting System Dashboard ⚡")
-    st.write("View live energy data, cost trends, and performance insights.")
+    st.title("⚡ Smart Energy Forecasting Dashboard")
+    st.write("Selamat datang ke sistem ramalan tenaga pintar!")
+    st.info("Gunakan menu di sebelah kiri untuk mengakses fungsi seperti ramalan tenaga, laporan, dan pengurusan peranti.")
 
-    conn = get_connection()
-    if conn:
-        df_sql = pd.read_sql("SELECT * FROM energy_data", conn)
-        st.subheader("📊 Stored Forecast Data")
-        st.dataframe(df_sql)
+# ------------------------------------------------------
+# ENERGY FORECAST MENU
+# ------------------------------------------------------
+elif menu == "🔋 Energy Forecast":
+    st.title("🔋 Energy Forecast Module")
 
-        fig = px.line(df_sql, x="year", y=["consumption", "forecast"],
-                      title="Baseline vs Forecast Energy Consumption")
-        st.plotly_chart(fig, use_container_width=True)
-        conn.close()
-    else:
-        st.info("Database not connected or no data found yet.")
-
-# -----------------------------
-# ENERGY FORECAST
-# -----------------------------
-elif menu == "⚡ Energy Forecast":
-    st.title("⚡ Energy Forecast Module")
-
-    st.sidebar.header("Input Options")
-    input_method = st.sidebar.radio("Choose Input Method", ("Upload CSV", "Manual Entry"))
+    # Step 1 — Data Input
+    st.header("Step 1 — Input baseline data")
+    input_mode = st.radio("Choose input method", ("Upload CSV", "Manual entry"))
 
     df = None
-    if input_method == "Upload CSV":
-        uploaded = st.file_uploader("Upload a CSV file", type=["csv", "xlsx"])
+    if input_mode == "Upload CSV":
+        uploaded = st.file_uploader("Upload CSV (columns: year, consumption, [optional cost])", type=["csv", "xlsx"])
         if uploaded:
-            if uploaded.name.endswith(".csv"):
-                df = pd.read_csv(uploaded)
-            else:
-                df = pd.read_excel(uploaded)
-            df.columns = [c.lower().strip().replace(" ", "_") for c in df.columns]
+            df = pd.read_csv(uploaded) if uploaded.name.endswith(".csv") else pd.read_excel(uploaded)
+            df.columns = [c.strip().lower().replace(" ", "_") for c in df.columns]
     else:
-        rows = st.number_input("Number of Records", 1, 20, 5)
-        data = []
+        rows = st.number_input("Number of data rows", 1, 20, 5)
+        data = {"year": [], "consumption": [], "baseline_cost": []}
         for i in range(int(rows)):
-            col1, col2 = st.columns(2)
-            with col1:
-                year = st.number_input(f"Year {i+1}", 2000, 2100, 2020 + i)
-            with col2:
-                consumption = st.number_input(f"Consumption (kWh) {i+1}", 0.0, 999999.0, 10000.0)
-            data.append({"year": year, "consumption": consumption})
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                y = st.number_input(f"Year {i+1}", 2000, 2100, 2020+i)
+            with c2:
+                e = st.number_input(f"Consumption (kWh) {i+1}", 0.0, 1e9, 10000.0)
+            with c3:
+                b = st.number_input(f"Cost (RM) {i+1}", 0.0, 1e9, 0.0)
+            data["year"].append(y)
+            data["consumption"].append(e)
+            data["baseline_cost"].append(b)
         df = pd.DataFrame(data)
 
     if df is not None and not df.empty:
-        st.success("✅ Data successfully loaded!")
         st.dataframe(df)
 
-        st.subheader("Scenario Settings")
-        tariff = st.number_input("Electricity Tariff (RM/kWh)", 0.0, 5.0, 0.5, 0.01)
-        factor_reduction = st.slider("Reduction Factor (%)", 0, 100, 10)
+        # Step 2 — Tariff & Factors
+        st.header("Step 2 — Adjust Factors")
+        tariff = st.number_input("Enter tariff (RM/kWh)", 0.0, 10.0, 0.5)
+        lamp_factor = st.slider("Lamp usage reduction (%) 💡", 0, 50, 10)
+        pc_factor = st.slider("Computer efficiency increase (%) 💻", 0, 50, 5)
+        lab_factor = st.slider("Lab equipment optimization (%) ⚗️", 0, 50, 8)
+        time_factor = st.slider("Operating hours adjustment (%) ⏱️", 0, 50, 5)
 
-        # Baseline & forecast
-        df["baseline_cost"] = df["consumption"] * tariff
-        df["forecast"] = df["consumption"] * (1 - factor_reduction / 100)
+        total_factor = (lamp_factor + pc_factor + lab_factor + time_factor) / 400  # Combined effect
+        df["baseline_cost"] = df["baseline_cost"].replace(0, np.nan).fillna(df["consumption"] * tariff)
+        df["forecast_consumption"] = df["consumption"] * (1 - total_factor)
+        df["forecast_cost"] = df["forecast_consumption"] * tariff
 
-        # Display results
-        st.subheader("Forecast Table")
+        # Step 3 — Forecast table
+        st.subheader("📊 Forecast Results")
+        df["energy_saving"] = df["consumption"] - df["forecast_consumption"]
+        df["cost_saving"] = df["baseline_cost"] - df["forecast_cost"]
+        df["co2_reduction"] = df["energy_saving"] * 0.00069
         st.dataframe(df)
 
-        # Graphs
-        st.subheader("Graphs")
-        col1, col2 = st.columns(2)
-        with col1:
-            fig1 = px.line(df, x="year", y=["consumption", "forecast"], markers=True,
-                           title="Baseline vs Forecast Consumption")
+        # Step 4 — Graphs
+        st.subheader("📈 Visualization")
+        tab1, tab2 = st.tabs(["Baseline vs Forecast", "Cost vs Forecast"])
+        with tab1:
+            fig1 = px.line(df, x="year", y=["consumption", "forecast_consumption"], markers=True, title="Baseline vs Forecast (kWh)")
             st.plotly_chart(fig1, use_container_width=True)
-        with col2:
-            fig2 = px.bar(df, x="year", y=["baseline_cost"], title="Baseline Cost Trend (RM)")
+        with tab2:
+            fig2 = px.line(df, x="year", y=["baseline_cost", "forecast_cost"], markers=True, title="Cost Comparison (RM)")
             st.plotly_chart(fig2, use_container_width=True)
 
-        # Save to DB
-        if st.button("💾 Save Forecast Data to Database"):
-            conn = get_connection()
-            if conn:
-                cursor = conn.cursor()
-                cursor.execute("""
-                    CREATE TABLE IF NOT EXISTS energy_data (
-                        id INT AUTO_INCREMENT PRIMARY KEY,
-                        year INT,
-                        consumption FLOAT,
-                        baseline_cost FLOAT,
-                        forecast FLOAT
-                    )
-                """)
-                for _, row in df.iterrows():
-                    cursor.execute("""
-                        INSERT INTO energy_data (year, consumption, baseline_cost, forecast)
-                        VALUES (%s, %s, %s, %s)
-                    """, (int(row['year']), float(row['consumption']),
-                          float(row['baseline_cost']), float(row['forecast'])))
-                conn.commit()
-                cursor.close()
-                conn.close()
-                st.success("✅ Data saved to MySQL database successfully!")
+        # Step 5 — Save to MySQL
+        if st.button("💾 Save Forecast to Database"):
+            conn = get_db_connection()
+            cur = conn.cursor()
+            for _, r in df.iterrows():
+                cur.execute("""
+                    INSERT INTO forecast_data (year, consumption, baseline_cost, adjusted_consumption, adjusted_cost,
+                    adjusted_energy_saving, adjusted_cost_saving, adjusted_co2_reduction, uploaded_at)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,NOW())
+                """, (
+                    r["year"], r["consumption"], r["baseline_cost"],
+                    r["forecast_consumption"], r["forecast_cost"],
+                    r["energy_saving"], r["cost_saving"], r["co2_reduction"]
+                ))
+            conn.commit()
+            conn.close()
+            st.success("✅ Data successfully saved to MySQL database!")
 
-# -----------------------------
+# ------------------------------------------------------
 # DEVICE MANAGEMENT
-# -----------------------------
-elif menu == "🔌 Device Management":
-    st.title("🔌 Device Management")
-    st.write("Add, monitor, or remove connected devices.")
-    st.info("Feature under development — future integration with IoT devices planned.")
+# ------------------------------------------------------
+elif menu == "🧠 Device Management":
+    st.title("🧠 Device Management")
+    st.info("Feature to monitor connected IoT devices (future integration).")
 
-# -----------------------------
+# ------------------------------------------------------
 # REPORTS
-# -----------------------------
-elif menu == "📊 Reports":
-    st.title("📊 Reports & Export")
+# ------------------------------------------------------
+elif menu == "📈 Reports":
+    st.title("📈 Reports & Data Export")
 
-    conn = get_connection()
-    if conn:
-        df_sql = pd.read_sql("SELECT * FROM energy_data", conn)
-        st.dataframe(df_sql)
+    conn = get_db_connection()
+    df_db = pd.read_sql("SELECT * FROM forecast_data ORDER BY year", conn)
+    conn.close()
 
-        # Export to Excel
-        excel = io.BytesIO()
-        with pd.ExcelWriter(excel, engine="xlsxwriter") as writer:
-            df_sql.to_excel(writer, index=False, sheet_name="ForecastData")
+    st.dataframe(df_db)
 
-        st.download_button(
-            "📥 Download Excel Report",
-            data=excel.getvalue(),
-            file_name="Energy_Report.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
-        conn.close()
-    else:
-        st.warning("No data available to export yet.")
+    # Graph
+    fig = px.line(df_db, x="year", y=["consumption", "adjusted_consumption"], markers=True, title="Database: Baseline vs Forecast")
+    st.plotly_chart(fig, use_container_width=True)
 
-# -----------------------------
+    # Export options
+    st.subheader("📂 Export Options")
+    if st.button("📄 Download as Excel"):
+        buffer = io.BytesIO()
+        with pd.ExcelWriter(buffer) as writer:
+            df_db.to_excel(writer, index=False, sheet_name="Forecast_Report")
+        st.download_button("⬇️ Download Excel File", data=buffer.getvalue(), file_name="forecast_report.xlsx")
+
+    if st.button("🧾 Download as PDF"):
+        pdf_path = "forecast_report.pdf"
+        doc = SimpleDocTemplate(pdf_path, pagesize=letter)
+        styles = getSampleStyleSheet()
+        story = [Paragraph("Energy Forecast Report", styles['Heading1']), Spacer(1, 12)]
+        story.append(Paragraph(f"Generated on {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", styles['Normal']))
+        story.append(Spacer(1, 12))
+        data = [df_db.columns.tolist()] + df_db.values.tolist()
+        story.append(Table(data))
+        doc.build(story)
+
+        with open(pdf_path, "rb") as f:
+            st.download_button("⬇️ Download PDF File", f, file_name="forecast_report.pdf")
+
+# ------------------------------------------------------
 # SETTINGS
-# -----------------------------
+# ------------------------------------------------------
 elif menu == "⚙️ Settings":
-    st.title("⚙️ Application Settings")
+    st.title("⚙️ Settings")
+    st.info("This section allows theme and system preferences configuration.")
 
-    st.subheader("🎨 Background Settings")
-    bg_choice = st.selectbox("Choose background theme", ["Dark", "Light", "Blue", "Green"])
-    if bg_choice == "Dark":
-        st.markdown("<style>body { background-color: #0E1117; color: white; }</style>", unsafe_allow_html=True)
-    elif bg_choice == "Light":
-        st.markdown("<style>body { background-color: #FFFFFF; color: black; }</style>", unsafe_allow_html=True)
-    elif bg_choice == "Blue":
-        st.markdown("<style>body { background-color: #001F3F; color: white; }</style>", unsafe_allow_html=True)
-    elif bg_choice == "Green":
-        st.markdown("<style>body { background-color: #003300; color: white; }</style>", unsafe_allow_html=True)
-
-    st.success(f"Theme updated to {bg_choice}")
-
-# -----------------------------
+# ------------------------------------------------------
 # HELP & ABOUT
-# -----------------------------
+# ------------------------------------------------------
 elif menu == "❓ Help & About":
     st.title("❓ Help & About")
-    st.write("""
-    This web application is developed for energy consumption analysis and forecasting.  
-    Users can input data manually or via CSV, visualize trends, and export reports.
+    st.markdown("""
+    ### 📬 Contact Support
+    If you encounter any issues or system errors, please contact:
+    **Email:** [chikaprojectsupport@gmail.com](mailto:chikaprojectsupport@gmail.com)
     
-    📧 For support or to report a system issue, contact:  
-    **nurshashiqah125@gmail.com**
+    ### 🧾 Version
+    - App Version: 2.0  
+    - Developer: Chika @ Polytechnic Kota Kinabalu
     """)
-    st.info("Developed with ❤️ by Chika using Streamlit and MySQL (Railway Cloud).")
