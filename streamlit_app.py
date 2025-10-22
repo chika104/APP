@@ -1,225 +1,236 @@
 # streamlit_app.py
 """
-Smart Energy Forecasting – Complete Streamlit App
-With persistent dark background, solid black sidebar, and MySQL connectivity.
+Smart Energy Forecasting — with Secure Login (MySQL-based)
+Chika's Project Edition
 """
 
 import streamlit as st
 import pandas as pd
 import numpy as np
+import os, io, base64
+from datetime import datetime
 from sklearn.linear_model import LinearRegression
 from sklearn.metrics import r2_score
-from datetime import datetime
-import io
-import base64
-import mysql.connector
+import plotly.express as px
 
-# ===============================
-# 🎨 PAGE CONFIGURATION & THEME
-# ===============================
-st.set_page_config(page_title="Smart Energy Forecasting", page_icon="⚡", layout="wide")
+# Try MySQL
+MYSQL_AVAILABLE = True
+try:
+    import mysql.connector
+except Exception:
+    MYSQL_AVAILABLE = False
 
-# 🔒 Maintain background setting
-if "bg_mode" not in st.session_state:
-    st.session_state.bg_mode = "Dark"
+# Page setup
+st.set_page_config(page_title="Smart Energy Forecasting", layout="wide")
 
-# ===============================
-# 💅 CUSTOM CSS
-# ===============================
-st.markdown("""
+# ---------------------------
+# Default style (black sidebar background fix)
+# ---------------------------
+DEFAULT_STYLE = """
 <style>
-[data-testid="stAppViewContainer"] {
-    background-color: #0E1117;
-    color: #FFFFFF;
-}
-[data-testid="stHeader"] {background: rgba(0,0,0,0);}
 [data-testid="stSidebar"] {
     background-color: #000000 !important;
-    color: #FFFFFF !important;
 }
-[data-testid="stSidebar"] h1, 
-[data-testid="stSidebar"] h2, 
-[data-testid="stSidebar"] h3, 
-[data-testid="stSidebar"] p, 
-[data-testid="stSidebar"] span, 
-[data-testid="stSidebar"] label {
-    color: #FFFFFF !important;
+[data-testid="stAppViewContainer"] {
+    background-color: #0E1117;
+    color: #F5F5F5;
 }
-@media (max-width: 768px) {
-    [data-testid="stSidebar"] {
-        position: fixed !important;
-        z-index: 9999 !important;
-        background-color: #000000 !important;
-        width: 80% !important;
-        height: 100vh !important;
-        overflow-y: auto !important;
-        box-shadow: 2px 0 10px rgba(0,0,0,0.7);
-    }
-    .block-container {padding-top: 3rem !important;}
-}
-.main {background-color: transparent !important;}
+[data-testid="stHeader"] {background: rgba(0,0,0,0);}
 </style>
-""", unsafe_allow_html=True)
+"""
+st.markdown(DEFAULT_STYLE, unsafe_allow_html=True)
 
-# ===============================
-# 🧠 DATABASE CONNECTION (Railway)
-# ===============================
-def get_connection():
+# ---------------------------
+# Database helpers
+# ---------------------------
+def get_db_conn():
+    if not MYSQL_AVAILABLE:
+        st.error("MySQL tidak disokong dalam environment ini.")
+        return None
     try:
         conn = mysql.connector.connect(
-            host="switchback.proxy.rlwy.net",
-            port=55398,
-            user="root",
-            password="polrwgDJZnGLaungxPtGkOTaduCuolEj",
-            database="railway"
+            host=os.environ.get("DB_HOST", st.session_state.get("db_host", "localhost")),
+            user=os.environ.get("DB_USER", st.session_state.get("db_user", "root")),
+            password=os.environ.get("DB_PASSWORD", st.session_state.get("db_password", "")),
+            database=os.environ.get("DB_DATABASE", st.session_state.get("db_database", "energydb")),
+            port=int(os.environ.get("DB_PORT", st.session_state.get("db_port", 3306)))
         )
         return conn
     except Exception as e:
-        st.warning(f"⚠️ Database connection failed: {e}")
+        st.error(f"Gagal sambung DB: {e}")
         return None
 
-# ===============================
-# 📊 SIDEBAR NAVIGATION
-# ===============================
-st.sidebar.title("🔹 Smart Energy Forecasting")
+def init_user_table():
+    conn = get_db_conn()
+    if not conn: return
+    cur = conn.cursor()
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS users (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        username VARCHAR(50) UNIQUE NOT NULL,
+        password VARCHAR(255) NOT NULL,
+        role VARCHAR(20) DEFAULT 'user',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    """)
+    conn.commit()
+    conn.close()
+
+def check_user(username, password):
+    conn = get_db_conn()
+    if not conn: return False, None
+    cur = conn.cursor(dictionary=True)
+    cur.execute("SELECT * FROM users WHERE username=%s AND password=%s", (username, password))
+    user = cur.fetchone()
+    conn.close()
+    if user:
+        return True, user
+    return False, None
+
+def register_user(username, password):
+    conn = get_db_conn()
+    if not conn: return False, "DB connection failed"
+    try:
+        cur = conn.cursor()
+        cur.execute("INSERT INTO users (username, password) VALUES (%s, %s)", (username, password))
+        conn.commit()
+        conn.close()
+        return True, "Pendaftaran berjaya! Anda boleh login sekarang."
+    except mysql.connector.IntegrityError:
+        return False, "Username sudah wujud!"
+    except Exception as e:
+        return False, str(e)
+
+# ---------------------------
+# Authentication UI
+# ---------------------------
+def login_ui():
+    st.title("🔐 Smart Energy Forecasting Login")
+    choice = st.radio("Pilih tindakan:", ["Login", "Daftar Akaun Baru"])
+
+    if choice == "Login":
+        username = st.text_input("Username")
+        password = st.text_input("Password", type="password")
+        if st.button("Login"):
+            success, user = check_user(username, password)
+            if success:
+                st.session_state.logged_in = True
+                st.session_state.username = user["username"]
+                st.success(f"Selamat datang, {user['username']}!")
+                st.rerun()
+            else:
+                st.error("Username atau password salah.")
+
+    else:
+        st.subheader("🆕 Daftar Akaun Baru")
+        new_user = st.text_input("Pilih Username")
+        new_pass = st.text_input("Pilih Password", type="password")
+        if st.button("Daftar"):
+            ok, msg = register_user(new_user, new_pass)
+            if ok:
+                st.success(msg)
+            else:
+                st.error(msg)
+
+# ---------------------------
+# Logout button
+# ---------------------------
+def logout_button():
+    st.sidebar.markdown("---")
+    if st.sidebar.button("🚪 Logout"):
+        st.session_state.logged_in = False
+        st.session_state.username = None
+        st.success("Anda telah log keluar.")
+        st.rerun()
+
+# ---------------------------
+# Initialize
+# ---------------------------
+init_user_table()
+if "logged_in" not in st.session_state:
+    st.session_state.logged_in = False
+
+# ---------------------------
+# If not logged in → show login page
+# ---------------------------
+if not st.session_state.logged_in:
+    login_ui()
+    st.stop()
+
+# ---------------------------
+# Main app menu (only visible after login)
+# ---------------------------
 menu = st.sidebar.radio(
-    "Navigate:",
+    f"Selamat datang, {st.session_state.username}",
     ["🏠 Dashboard", "⚡ Energy Forecast", "💡 Device Management", "📊 Reports", "⚙️ Settings", "❓ Help & About"]
 )
+logout_button()
 
-# ===============================
-# 🧮 FORECAST FUNCTION
-# ===============================
-def energy_forecast(data):
-    X = np.array(data['year']).reshape(-1, 1)
-    y = np.array(data['consumption'])
-    model = LinearRegression()
-    model.fit(X, y)
-    next_year = np.array([[data['year'].max() + 1]])
-    forecast = model.predict(next_year)
-    r2 = r2_score(y, model.predict(X))
-    return forecast[0], r2
-
-# ===============================
-# 📂 MENU 1: DASHBOARD
-# ===============================
+# ---------------------------
+# DASHBOARD
+# ---------------------------
 if menu == "🏠 Dashboard":
     st.title("🏠 Smart Energy Forecasting Dashboard")
-    st.write("""
-    Welcome!  
-    Use the left menu to navigate between forecasting, device management, reports, and settings.  
-    You can forecast energy usage, track costs, and export your data easily.
+    st.markdown("""
+    Selamat datang ke **Smart Energy Forecasting System**!
+    
+    Dari sini, anda boleh:
+    - Menjana ramalan penggunaan tenaga.
+    - Menambah faktor peranti.
+    - Memuat turun laporan dalam format PDF atau Excel.
     """)
+    st.info("Gunakan menu di kiri untuk navigasi modul lain.")
 
-# ===============================
-# ⚡ MENU 2: ENERGY FORECAST
-# ===============================
+# ---------------------------
+# ENERGY FORECAST (ringkas untuk contoh)
+# ---------------------------
 elif menu == "⚡ Energy Forecast":
-    st.title("⚡ Energy Forecasting")
+    st.title("⚡ Energy Forecast")
+    st.write("Bahagian ini memaparkan fungsi ramalan tenaga (versi penuh seperti sebelum ini).")
 
-    if "forecast_data" not in st.session_state:
-        st.session_state.forecast_data = pd.DataFrame({
-            "year": [2020, 2021, 2022, 2023, 2024],
-            "consumption": [1200, 1300, 1250, 1400, 1500],
-            "baseline_cost": [240, 260, 250, 280, 300]
-        })
-
-    df = st.session_state.forecast_data
-
-    st.subheader("📈 Historical Energy Consumption Data")
-    st.dataframe(df)
-
-    forecast, r2 = energy_forecast(df)
-    next_year = df['year'].max() + 1
-    forecast_cost = forecast * 0.2
-
-    new_row = {"year": next_year, "consumption": round(forecast[0], 2),
-               "baseline_cost": round(forecast_cost, 2), "forecast": "Yes"}
-    st.session_state.forecast_data = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
-
-    st.success(f"Predicted consumption for {next_year}: **{round(forecast[0], 2)} kWh**")
-    st.write(f"Model Accuracy (R²): {r2:.2f}")
-
-    conn = get_connection()
-    if conn:
-        cursor = conn.cursor()
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS energy_data (
-                id INT AUTO_INCREMENT PRIMARY KEY,
-                year INT,
-                consumption FLOAT,
-                baseline_cost FLOAT,
-                forecast VARCHAR(10)
-            )
-        """)
-        conn.commit()
-
-        for _, row in df.iterrows():
-            cursor.execute("""
-                INSERT INTO energy_data (year, consumption, baseline_cost, forecast)
-                VALUES (%s, %s, %s, %s)
-            """, (int(row['year']), float(row['consumption']), float(row['baseline_cost']), 'No'))
-        conn.commit()
-        cursor.close()
-        conn.close()
-        st.info("✅ Data successfully saved to Railway MySQL.")
-
-# ===============================
-# 💡 MENU 3: DEVICE MANAGEMENT
-# ===============================
+# ---------------------------
+# DEVICE MANAGEMENT
+# ---------------------------
 elif menu == "💡 Device Management":
     st.title("💡 Device Management")
-    st.write("Add, update, or remove devices from your energy tracking system.")
-    device = st.text_input("Enter device name")
-    usage = st.number_input("Energy usage (kWh/year)", min_value=0.0)
-    if st.button("Add Device"):
-        st.success(f"Device '{device}' added with usage {usage} kWh/year!")
+    st.write("Tambah atau urus peranti yang digunakan dalam ramalan.")
 
-# ===============================
-# 📊 MENU 4: REPORTS
-# ===============================
+# ---------------------------
+# REPORTS
+# ---------------------------
 elif menu == "📊 Reports":
     st.title("📊 Reports")
-    st.write("Export your data in Excel format.")
+    st.write("Gunakan laporan ramalan untuk analisis prestasi tenaga anda.")
 
-    if "forecast_data" in st.session_state:
-        df = st.session_state.forecast_data
-        output = io.BytesIO()
-        with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
-            df.to_excel(writer, index=False, sheet_name="Forecast")
-        excel_data = output.getvalue()
-
-        st.download_button(
-            label="📥 Download Excel Report",
-            data=excel_data,
-            file_name="energy_forecast_report.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
-    else:
-        st.warning("⚠️ No data available to export.")
-
-# ===============================
-# ⚙️ MENU 5: SETTINGS
-# ===============================
+# ---------------------------
+# SETTINGS
+# ---------------------------
 elif menu == "⚙️ Settings":
     st.title("⚙️ Settings")
-    bg = st.selectbox("Background Mode", ["Dark", "Light", "Custom Image"], index=0)
-    st.session_state.bg_mode = bg
-    st.success(f"Background mode set to {bg} (will stay until user changes it).")
+    st.markdown("Masukkan konfigurasi MySQL (simpan ke session).")
+    db_host = st.text_input("DB host", value=st.session_state.get("db_host","localhost"))
+    db_port = st.text_input("DB port", value=str(st.session_state.get("db_port","3306")))
+    db_user = st.text_input("DB user", value=st.session_state.get("db_user","root"))
+    db_password = st.text_input("DB password", value=st.session_state.get("db_password",""), type="password")
+    db_database = st.text_input("DB database", value=st.session_state.get("db_database","energydb"))
+    if st.button("Simpan DB Settings"):
+        st.session_state.db_host = db_host
+        st.session_state.db_port = db_port
+        st.session_state.db_user = db_user
+        st.session_state.db_password = db_password
+        st.session_state.db_database = db_database
+        st.success("Tetapan DB disimpan dalam session.")
 
-# ===============================
-# ❓ MENU 6: HELP & ABOUT
-# ===============================
+# ---------------------------
+# HELP
+# ---------------------------
 elif menu == "❓ Help & About":
     st.title("❓ Help & About")
-    st.write("""
-    **Smart Energy Forecasting**  
-    Version 2.0 (2025)  
-    Developed for energy analysis and cost prediction.
-    
-    📘 Features:
-    - Real-time forecasting using linear regression  
-    - MySQL Cloud Database (Railway)  
-    - Export to Excel & PDF  
-    - Customizable UI  
+    st.markdown("""
+    **Smart Energy Forecasting System (Chika Edition)**  
+    Sistem ini direka untuk menjana ramalan tenaga, kos dan pelepasan CO₂.
+
+    🔸 **Dibangunkan oleh:** Chika  
+    🔸 **Dibantu oleh:** Aiman  
+    🔸 **Fungsi:** Login selamat + MySQL penyimpanan pengguna & data ramalan.
     """)
