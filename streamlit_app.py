@@ -1,171 +1,185 @@
 import streamlit as st
-import mysql.connector
 import pandas as pd
+import mysql.connector
+from mysql.connector import Error
 import matplotlib.pyplot as plt
+import numpy as np
 
-# ===================== DATABASE CONNECTION =====================
-def get_db_connection():
+# -------------------- CONFIGURATIONS --------------------
+st.set_page_config(page_title="Smart Energy Forecasting", layout="wide")
+
+DB_CONFIG = {
+    "host": "switchback.proxy.rlwy.net",
+    "port": 55398,
+    "user": "root",
+    "password": "polrwgDJZnGLaungxPtGkOTaduCuolEj",
+    "database": "railway"
+}
+
+# -------------------- DB CONNECTION --------------------
+def get_connection():
     try:
-        conn = mysql.connector.connect(
-            host="switchback.proxy.rlwy.net",
-            port=55398,
-            user="root",
-            password="polrwgDJZnGLaungxPtGkOTaduCuolEj",
-            database="railway"
-        )
+        conn = mysql.connector.connect(**DB_CONFIG)
         return conn
-    except mysql.connector.Error as err:
-        st.error(f"Gagal sambung DB: {err}")
+    except Error as e:
+        st.error(f"❌ Gagal sambung DB: {e}")
         return None
 
-
-# ===================== REGISTER FUNCTION =====================
-def register_user(username, password):
-    conn = get_db_connection()
-    if conn:
-        cursor = conn.cursor()
-        cursor.execute("SELECT * FROM users WHERE username=%s", (username,))
-        if cursor.fetchone():
-            st.warning("Nama pengguna sudah wujud!")
-        else:
-            cursor.execute(
-                "INSERT INTO users (username, password_hash) VALUES (%s, %s)",
-                (username, password)
-            )
-            conn.commit()
-            st.success("Pendaftaran berjaya! Anda boleh log masuk sekarang.")
-        cursor.close()
-        conn.close()
-
-
-# ===================== LOGIN FUNCTION =====================
-def login_user(username, password):
-    conn = get_db_connection()
+# -------------------- USER AUTH --------------------
+def get_user(username):
+    conn = get_connection()
     if conn:
         cursor = conn.cursor(dictionary=True)
-        cursor.execute("SELECT * FROM users WHERE username=%s", (username,))
+        cursor.execute("SELECT * FROM users WHERE username = %s", (username,))
         user = cursor.fetchone()
-        cursor.close()
         conn.close()
+        return user
+    return None
 
-        if user and user["password_hash"] == password:
-            st.session_state.logged_in = True
-            st.session_state.user = username
-            st.success(f"Selamat datang, {username}!")
-            st.rerun()
-        else:
-            st.error("Nama pengguna atau kata laluan salah!")
+def register_user(username, password):
+    conn = get_connection()
+    if conn:
+        cursor = conn.cursor()
+        cursor.execute("INSERT INTO users (username, password_hash) VALUES (%s, %s)", (username, password))
+        conn.commit()
+        conn.close()
+        return True
+    return False
 
+# -------------------- BACKGROUND STYLE --------------------
+if "bg_style" not in st.session_state:
+    st.session_state.bg_style = "black"
 
-# ===================== LOGIN FORM =====================
-def login_form():
-    st.markdown("<h2 style='text-align:center;'>🔒 Secure Login</h2>", unsafe_allow_html=True)
+def set_background(color):
+    st.markdown(
+        f"""
+        <style>
+        [data-testid="stSidebar"] {{
+            background-color: #000000;
+            color: white;
+        }}
+        [data-testid="stAppViewContainer"] {{
+            background-color: {color};
+            color: white;
+        }}
+        h1, h2, h3, h4, h5, h6, p, span, div {{
+            color: white !important;
+        }}
+        </style>
+        """,
+        unsafe_allow_html=True
+    )
 
-    username = st.text_input("Username")
-    password = st.text_input("Password", type="password")
+set_background(st.session_state.bg_style)
 
-    col1, col2 = st.columns(2)
-    with col1:
+# -------------------- LOGIN & REGISTER --------------------
+def login_register():
+    st.title("🔐 Please login to access the dashboard")
+    st.subheader("🔒 Secure Login")
+
+    tab_login, tab_register = st.tabs(["Login", "Register"])
+
+    with tab_login:
+        username = st.text_input("Username", key="login_user")
+        password = st.text_input("Password", type="password", key="login_pass")
         if st.button("Login"):
-            login_user(username, password)
-    with col2:
+            user = get_user(username)
+            if user and user["password_hash"] == password:
+                st.session_state.logged_in = True
+                st.session_state.username = username
+                st.rerun()
+            else:
+                st.error("Nama pengguna atau kata laluan salah!")
+
+    with tab_register:
+        username_r = st.text_input("New Username", key="reg_user")
+        password_r = st.text_input("New Password", type="password", key="reg_pass")
         if st.button("Register"):
-            register_user(username, password)
+            user = get_user(username_r)
+            if user:
+                st.warning("Nama pengguna sudah wujud!")
+            else:
+                if register_user(username_r, password_r):
+                    st.success("Akaun berjaya didaftarkan! Sila login semula.")
 
+# -------------------- DASHBOARD MENU --------------------
+def sidebar_menu():
+    st.sidebar.title("💠 Smart Energy Forecasting")
+    menu = st.sidebar.radio(
+        "Navigate:",
+        ["🏠 Dashboard", "⚡ Energy Forecast", "💡 Device Management",
+         "📊 Reports", "⚙️ Settings", "❓ Help & About"]
+    )
+    return menu
 
-# ===================== PAGE SETUP =====================
-st.set_page_config(page_title="Energy Dashboard", layout="wide")
+# -------------------- GRAPH FUNCTION --------------------
+def plot_graph(title, x, y, color, labelx, labely):
+    fig, ax = plt.subplots()
+    ax.plot(x, y, color=color, linewidth=3)
+    ax.set_title(title, color='white')
+    ax.set_xlabel(labelx)
+    ax.set_ylabel(labely)
+    ax.grid(True, linestyle='--', alpha=0.5)
+    fig.patch.set_facecolor('#111111')
+    ax.set_facecolor('#111111')
+    st.pyplot(fig)
 
+# -------------------- DASHBOARD CONTENT --------------------
+def dashboard():
+    st.header("📊 Dashboard Overview")
+    st.info(f"Welcome, {st.session_state.username}!")
+
+    x = np.arange(2020, 2027)
+    baseline = np.random.randint(300, 600, len(x))
+    forecast = baseline + np.random.randint(-100, 100, len(x))
+    adjusted = baseline - np.random.randint(0, 80, len(x))
+    cost_base = baseline * 0.25
+    cost_forecast = forecast * 0.25
+    co2_base = baseline * 0.3
+    co2_forecast = forecast * 0.3
+
+    plot_graph("Baseline Energy", x, baseline, "red", "Year", "kWh")
+    plot_graph("Baseline vs Forecast", x, forecast, "blue", "Year", "kWh")
+    plot_graph("Adjusted vs Forecast vs Baseline", x, adjusted, "orange", "Year", "kWh")
+    plot_graph("Baseline Cost", x, cost_base, "purple", "Year", "RM")
+    plot_graph("Forecast Cost vs Baseline Cost", x, cost_forecast, "green", "Year", "RM")
+    plot_graph("CO₂ Baseline", x, co2_base, "grey", "Year", "kgCO₂")
+    plot_graph("CO₂ Baseline vs Forecast", x, co2_forecast, "cyan", "Year", "kgCO₂")
+
+# -------------------- SETTINGS --------------------
+def settings():
+    st.header("⚙️ Settings")
+    color = st.color_picker("Pilih warna latar belakang:", st.session_state.bg_style)
+    if st.button("Tukar Latar Belakang"):
+        st.session_state.bg_style = color
+        st.rerun()
+    st.success("Warna latar belakang kekal walaupun tukar menu.")
+
+# -------------------- APP --------------------
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
 
-if "bg_color" not in st.session_state:
-    st.session_state.bg_color = "#0d1117"  # default dark background
-
-# ===================== LOGIN CHECK =====================
 if not st.session_state.logged_in:
-    st.markdown(
-        f"<h1 style='text-align:center;color:white;'>🔐 Please login to access the dashboard</h1>",
-        unsafe_allow_html=True
-    )
-    login_form()
+    login_register()
     st.stop()
+else:
+    menu = sidebar_menu()
 
-# ===================== DASHBOARD =====================
-st.markdown(
-    f"""
-    <style>
-        body {{
-            background-color: {st.session_state.bg_color};
-            color: white;
-        }}
-        .main {{
-            background-color: {st.session_state.bg_color};
-        }}
-        .menu-bar {{
-            background-color: #000;
-            padding: 12px;
-            text-align: center;
-            border-radius: 12px;
-        }}
-        .menu-item {{
-            color: white;
-            margin: 0 15px;
-            text-decoration: none;
-            font-weight: bold;
-        }}
-        .menu-item:hover {{
-            color: #00b4d8;
-        }}
-    </style>
-    <div class='menu-bar'>
-        <a class='menu-item' href='#'>Dashboard</a>
-        <a class='menu-item' href='#'>Usage</a>
-        <a class='menu-item' href='#'>Forecast</a>
-        <a class='menu-item' href='#'>Reports</a>
-        <a class='menu-item' href='#'>Settings</a>
-        <a class='menu-item' href='#'>Profile</a>
-        <a class='menu-item' href='#'>Logout</a>
-    </div>
-    """,
-    unsafe_allow_html=True
-)
+    if menu == "🏠 Dashboard":
+        dashboard()
+    elif menu == "⚡ Energy Forecast":
+        st.header("⚡ Energy Forecast Module")
+    elif menu == "💡 Device Management":
+        st.header("💡 Device Management")
+    elif menu == "📊 Reports":
+        st.header("📊 Reports Section")
+    elif menu == "⚙️ Settings":
+        settings()
+    elif menu == "❓ Help & About":
+        st.header("❓ Help & About")
+        st.info("Developed by Chika — Polytechnic Kota Kinabalu Project")
 
-st.title("📊 Energy Usage Dashboard")
-st.markdown("Warna graf kontras — terang vs gelap (merah, biru tua, hijau, oren, ungu, kuning, kelabu).")
-
-# Contoh dataset rawak
-data = {
-    "Month": ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul"],
-    "Energy_Use": [120, 135, 150, 145, 160, 155, 170],
-    "Cost": [300, 340, 360, 355, 380, 370, 400],
-}
-df = pd.DataFrame(data)
-
-# 7 graf
-colors = ["red", "darkblue", "green", "orange", "purple", "gold", "gray"]
-titles = [
-    "Energy Usage Trend",
-    "Cost Comparison",
-    "Monthly Growth",
-    "Energy vs Cost",
-    "Forecast Accuracy",
-    "Daily Average",
-    "Yearly Projection",
-]
-
-for i, title in enumerate(titles):
-    fig, ax = plt.subplots()
-    ax.plot(df["Month"], df["Energy_Use"], color=colors[i % len(colors)], linewidth=3)
-    ax.set_title(title, color="white")
-    ax.set_facecolor("#1a1a1a")
-    ax.tick_params(colors="white")
-    st.pyplot(fig)
-
-# Tukar warna background
-st.sidebar.header("⚙️ Settings")
-bg_color = st.sidebar.color_picker("Pilih warna latar belakang", st.session_state.bg_color)
-if st.sidebar.button("Simpan warna latar"):
-    st.session_state.bg_color = bg_color
-    st.sidebar.success("Warna latar disimpan! 🌈")
-    st.rerun()
+    st.sidebar.write("---")
+    if st.sidebar.button("🚪 Logout"):
+        st.session_state.logged_in = False
+        st.rerun()
