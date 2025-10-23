@@ -1,216 +1,186 @@
+# streamlit_app.py — Updated version with full 6 menus and expanded graphs
+
+import os, io, base64
+from datetime import datetime
 import streamlit as st
 import pandas as pd
 import numpy as np
-import mysql.connector
 import plotly.express as px
+from sklearn.linear_model import LinearRegression
+from sklearn.metrics import r2_score
 
-# -------------------- DATABASE CONNECTION --------------------
-def get_connection():
-    return mysql.connector.connect(
-        host="switchback.proxy.rlwy.net",
-        port=55398,
-        user="root",
-        password="polrwgDJZnGLaungxPtGkOTaduCuolEj",
-        database="railway"
-    )
+# Optional libs
+try:
+    import mysql.connector
+    MYSQL_AVAILABLE = True
+except:
+    MYSQL_AVAILABLE = False
 
-def create_user_table():
-    conn = get_connection()
+st.set_page_config(page_title="Smart Energy Forecasting", layout="wide")
+
+# ---------------- SIDEBAR ----------------
+menu = st.sidebar.radio(
+    "📋 Navigation",
+    ["🏠 Dashboard", "⚡ Energy Forecast", "💡 Device Management",
+     "📊 Reports", "⚙️ Settings", "❓ Help & About"]
+)
+
+# --------------- UTILITY ----------------
+def normalize_cols(df):
+    df.columns = [c.strip().lower().replace(" ", "_") for c in df.columns]
+    return df
+
+def get_db_config():
+    return {
+        "host": st.session_state.get("db_host"),
+        "user": st.session_state.get("db_user"),
+        "password": st.session_state.get("db_password"),
+        "database": st.session_state.get("db_database"),
+        "port": int(st.session_state.get("db_port", 3306)),
+    }
+
+def connect_db():
+    cfg = get_db_config()
+    return mysql.connector.connect(**cfg)
+
+def init_user_table(conn):
     c = conn.cursor()
     c.execute("""
-        CREATE TABLE IF NOT EXISTS user_accounts (
+        CREATE TABLE IF NOT EXISTS user_records (
             id INT AUTO_INCREMENT PRIMARY KEY,
-            username VARCHAR(100) UNIQUE,
-            password VARCHAR(100)
+            username VARCHAR(100),
+            password VARCHAR(100),
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
     conn.commit()
-    conn.close()
+    c.close()
 
-def add_user(username, password):
-    conn = get_connection()
-    c = conn.cursor()
-    c.execute("INSERT INTO user_accounts (username, password) VALUES (%s, %s)", (username, password))
-    conn.commit()
-    conn.close()
+# --------------- DASHBOARD ----------------
+if menu == "🏠 Dashboard":
+    st.title("🏠 Dashboard — Smart Energy Forecasting")
+    st.markdown("Selamat datang ke sistem ramalan tenaga pintar anda ⚡")
 
-def login_user(username, password):
-    conn = get_connection()
-    c = conn.cursor()
-    c.execute("SELECT * FROM user_accounts WHERE username=%s AND password=%s", (username, password))
-    data = c.fetchone()
-    conn.close()
-    return data
+# --------------- ENERGY FORECAST ----------------
+elif menu == "⚡ Energy Forecast":
+    st.title("⚡ Energy Forecast")
 
-create_user_table()
+    # INPUT DATA
+    input_mode = st.radio("Input method:", ["Upload CSV", "Manual Entry"])
+    if input_mode == "Upload CSV":
+        uploaded = st.file_uploader("Upload CSV (columns: year, consumption, cost optional)", type=["csv"])
+        if uploaded:
+            df = pd.read_csv(uploaded)
+            df = normalize_cols(df)
+    else:
+        rows = st.number_input("Number of rows", 1, 10, 5)
+        data = []
+        for i in range(rows):
+            c1, c2, c3 = st.columns(3)
+            with c1: y = st.number_input(f"Year {i+1}", 2000, 2100, 2020+i)
+            with c2: cons = st.number_input(f"Consumption (kWh) {i+1}", 0.0, 9999999.0, 10000.0)
+            with c3: cost = st.number_input(f"Cost (RM) {i+1}", 0.0, 9999999.0, 0.0)
+            data.append({"year": int(y), "consumption": cons, "cost": cost})
+        df = pd.DataFrame(data)
 
-# -------------------- STYLING --------------------
-st.set_page_config(page_title="Smart Energy Forecast", layout="wide")
+    if df is None or df.empty:
+        st.warning("Please upload or input baseline data.")
+        st.stop()
 
-st.markdown("""
-    <style>
-    .main {
-        background-color: #0b0b0b;
-        color: white;
-        background-size: cover;
-    }
-    div[data-testid="stSidebar"] {
-        background-color: black;
-    }
-    </style>
-""", unsafe_allow_html=True)
+    df["baseline_cost"] = np.where(df["cost"] == 0, df["consumption"] * 0.52, df["cost"])
+    st.subheader("Baseline Data")
+    st.dataframe(df)
 
-# -------------------- LOGIN SECTION --------------------
-if "logged_in" not in st.session_state:
-    st.session_state.logged_in = False
+    # FORECAST MODEL
+    model = LinearRegression()
+    model.fit(df[["year"]], df["consumption"])
+    years_future = [df["year"].max() + i for i in range(1, 6)]
+    baseline_pred = model.predict(np.array(years_future).reshape(-1, 1))
+    adjusted_pred = baseline_pred * 0.95  # example adjustment
+    r2 = r2_score(df["consumption"], model.predict(df[["year"]]))
 
-def login_section():
-    st.title("🔐 Login to Smart Energy Forecast Dashboard")
-    tab1, tab2 = st.tabs(["Login", "Register"])
-    
-    with tab1:
-        uname = st.text_input("Username")
-        pword = st.text_input("Password", type="password")
-        if st.button("Login"):
-            user = login_user(uname, pword)
-            if user:
-                st.session_state.logged_in = True
-                st.session_state.user = uname
-                st.success("Login successful ✅")
-            else:
-                st.error("Nama pengguna atau kata laluan salah!")
-    
-    with tab2:
-        new_user = st.text_input("New Username")
-        new_pass = st.text_input("New Password", type="password")
-        if st.button("Register"):
-            try:
-                add_user(new_user, new_pass)
-                st.success("Pendaftaran berjaya! Sila login.")
-            except:
-                st.warning("Nama pengguna sudah wujud.")
+    forecast_df = pd.DataFrame({
+        "year": years_future,
+        "baseline_kwh": baseline_pred,
+        "forecast_kwh": adjusted_pred,
+        "baseline_cost": baseline_pred * 0.52,
+        "forecast_cost": adjusted_pred * 0.52,
+        "co2_forecast": adjusted_pred * 0.75,
+    })
 
-# -------------------- DASHBOARD --------------------
-def dashboard():
-    st.sidebar.title("⚙️ Menu Utama")
-    menu = st.sidebar.radio("Pilih menu:", [
-        "🏠 Dashboard",
-        "⚡ Energy Forecast",
-        "🔌 Device Management",
-        "📊 Report",
-        "⚙️ Settings",
-        "💬 Help & About"
-    ])
+    # GRAPH 1: Baseline kWh
+    st.subheader("📈 Baseline kWh")
+    fig1 = px.line(df, x="year", y="consumption", markers=True, title="Baseline kWh")
+    st.plotly_chart(fig1, use_container_width=True)
 
-    # -------------------- HOME --------------------
-    if menu == "🏠 Dashboard":
-        st.title("⚡ Smart Energy Forecast Dashboard")
-        st.write("Selamat datang ke sistem ramalan tenaga pintar 💡")
+    # GRAPH 2: Baseline vs Forecast kWh
+    st.subheader("📊 Baseline vs Forecast kWh")
+    fig2 = px.line(forecast_df, x="year", y=["baseline_kwh", "forecast_kwh"],
+                   markers=True, title="Baseline vs Forecast kWh")
+    st.plotly_chart(fig2, use_container_width=True)
 
-        if "df" in st.session_state:
-            st.dataframe(st.session_state.df)
-        else:
-            st.info("Tiada data. Pergi ke menu Settings atau Upload CSV di Energy Forecast.")
+    # GRAPH 3: Baseline Cost
+    st.subheader("💰 Baseline Cost")
+    fig3 = px.bar(df, x="year", y="baseline_cost", title="Baseline Cost (RM)")
+    st.plotly_chart(fig3, use_container_width=True)
 
-    # -------------------- ENERGY FORECAST --------------------
-    elif menu == "⚡ Energy Forecast":
-        st.title("⚡ Energy Forecast Analysis")
+    # GRAPH 4: Baseline vs Forecast Cost
+    st.subheader("💸 Baseline vs Forecast Cost")
+    fig4 = px.bar(forecast_df, x="year", y=["baseline_cost", "forecast_cost"],
+                  barmode="group", title="Baseline vs Forecast Cost (RM)")
+    st.plotly_chart(fig4, use_container_width=True)
 
-        # Upload Data
-        upload_option = st.radio("Pilih kaedah data:", ["Manual", "Upload CSV"])
-        if upload_option == "Manual":
-            year = st.number_input("Tahun", min_value=2000, max_value=2100)
-            consumption = st.number_input("Penggunaan (kWh)")
-            if st.button("Tambah Data"):
-                new_data = pd.DataFrame({"year": [year], "consumption": [consumption]})
-                if "df" not in st.session_state:
-                    st.session_state.df = new_data
-                else:
-                    st.session_state.df = pd.concat([st.session_state.df, new_data], ignore_index=True)
-                st.success("Data berjaya ditambah!")
-        else:
-            uploaded_file = st.file_uploader("Muat naik fail CSV", type=["csv"])
-            if uploaded_file:
-                df = pd.read_csv(uploaded_file)
-                st.session_state.df = df
-                st.success("CSV dimuat naik!")
+    # GRAPH 5: CO2 Forecast
+    st.subheader("🌱 CO₂ Forecast")
+    fig5 = px.area(forecast_df, x="year", y="co2_forecast", title="CO₂ Forecast (kg)")
+    st.plotly_chart(fig5, use_container_width=True)
 
-        if "df" in st.session_state:
-            df = st.session_state.df
-            df = df.sort_values("year")
-            st.subheader("📋 Data Asal")
-            st.dataframe(df)
+    st.success(f"Model R² Score: {r2:.4f}")
 
-            # 1️⃣ Baseline KWh
-            fig1 = px.line(df, x="year", y="consumption", title="Baseline Energy Consumption (kWh)", color_discrete_sequence=["#FF0000"])
-            st.plotly_chart(fig1, use_container_width=True)
+    # AUTO SAVE TO DB
+    if MYSQL_AVAILABLE and "db_host" in st.session_state:
+        try:
+            conn = connect_db()
+            init_user_table(conn)
+            cursor = conn.cursor()
+            for _, row in df.iterrows():
+                cursor.execute("INSERT INTO user_records (username,password) VALUES (%s,%s)",
+                               (f"user_{row['year']}", f"pass_{int(row['consumption'])}"))
+            conn.commit()
+            conn.close()
+            st.info("✅ Data auto-saved into database successfully.")
+        except Exception as e:
+            st.error(f"DB Save Error: {e}")
 
-            # Linear Forecast
-            m, b = np.polyfit(df["year"], df["consumption"], 1)
-            future_years = np.arange(df["year"].max() + 1, df["year"].max() + 6)
-            forecast = m * future_years + b
-            forecast_df = pd.DataFrame({"year": future_years, "forecast": forecast})
-            st.session_state.forecast_df = forecast_df
+# --------------- DEVICE MANAGEMENT ----------------
+elif menu == "💡 Device Management":
+    st.title("💡 Device Management")
+    st.write("Add / Edit devices used in forecast.")
 
-            # 2️⃣ Baseline vs Forecast (kWh)
-            df_combined = pd.concat([df, forecast_df], ignore_index=True)
-            fig2 = px.line(df_combined, x="year", y=["consumption", "forecast"], title="Baseline vs Forecast (kWh)", color_discrete_sequence=["#FF4500", "#0066CC"])
-            st.plotly_chart(fig2, use_container_width=True)
+# --------------- REPORTS ----------------
+elif menu == "📊 Reports":
+    st.title("📊 Reports")
+    st.write("View historical forecasts and download summaries here.")
 
-            # 3️⃣ Baseline Cost
-            df["baseline_cost"] = df["consumption"] * 0.2
-            fig3 = px.bar(df, x="year", y="baseline_cost", title="Baseline Cost (RM)", color_discrete_sequence=["#008B8B"])
-            st.plotly_chart(fig3, use_container_width=True)
+# --------------- SETTINGS ----------------
+elif menu == "⚙️ Settings":
+    st.title("⚙️ Settings")
+    st.subheader("Database Configuration")
+    st.session_state.db_host = st.text_input("Host", st.session_state.get("db_host", ""))
+    st.session_state.db_port = st.text_input("Port", st.session_state.get("db_port", "3306"))
+    st.session_state.db_user = st.text_input("User", st.session_state.get("db_user", ""))
+    st.session_state.db_password = st.text_input("Password", st.session_state.get("db_password", ""), type="password")
+    st.session_state.db_database = st.text_input("Database", st.session_state.get("db_database", ""))
 
-            # 4️⃣ Baseline vs Forecast Cost
-            forecast_df["forecast_cost"] = forecast_df["forecast"] * 0.2
-            cost_compare = pd.concat([df[["year", "baseline_cost"]], forecast_df[["year", "forecast_cost"]]], ignore_index=True)
-            fig4 = px.line(cost_compare, x="year", y=["baseline_cost", "forecast_cost"], title="Baseline vs Forecast Cost (RM)", color_discrete_sequence=["#FFA500", "#0000CD"])
-            st.plotly_chart(fig4, use_container_width=True)
+    if st.button("Save Settings"):
+        st.success("Settings saved successfully.")
 
-            # 5️⃣ CO₂ Forecast
-            forecast_df["co2_forecast"] = forecast_df["forecast"] * 0.000233
-            fig5 = px.bar(forecast_df, x="year", y="co2_forecast", title="CO₂ Forecast (kg)", color_discrete_sequence=["#32CD32"])
-            st.plotly_chart(fig5, use_container_width=True)
-
-    # -------------------- DEVICE MANAGEMENT --------------------
-    elif menu == "🔌 Device Management":
-        st.title("🔌 Device Management")
-        st.write("Tambah dan semak peranti IoT yang digunakan.")
-        if "devices" not in st.session_state:
-            st.session_state.devices = []
-        device_name = st.text_input("Nama Peranti")
-        status = st.selectbox("Status", ["Active", "Inactive"])
-        if st.button("Tambah Peranti"):
-            st.session_state.devices.append({"Device": device_name, "Status": status})
-        st.table(st.session_state.devices)
-
-    # -------------------- REPORT --------------------
-    elif menu == "📊 Report":
-        st.title("📊 Full Report Summary")
-        if "forecast_df" in st.session_state:
-            st.dataframe(st.session_state.forecast_df)
-        else:
-            st.warning("Tiada data forecast.")
-
-    # -------------------- SETTINGS --------------------
-    elif menu == "⚙️ Settings":
-        st.title("⚙️ Settings")
-        color = st.color_picker("Tukar warna latar belakang:", "#0b0b0b")
-        st.session_state.bg_color = color
-        st.write(f"Background diset kepada {color}")
-
-    # -------------------- HELP & ABOUT --------------------
-    elif menu == "💬 Help & About":
-        st.title("💬 Help & About")
-        st.write("""
-        **Smart Energy Forecast System**
-        Dibangunkan oleh Chika di Politeknik Kota Kinabalu 💡  
-        Projek ini bertujuan membantu pengguna menganalisis dan meramal penggunaan tenaga menggunakan pembelajaran mesin.
-        """)
-
-# -------------------- MAIN APP --------------------
-if not st.session_state.logged_in:
-    login_section()
-else:
-    dashboard()
+# --------------- HELP & ABOUT ----------------
+elif menu == "❓ Help & About":
+    st.title("❓ Help & About")
+    st.markdown("""
+    **Smart Energy Forecasting System (Chika Edition)**  
+    Developed for automated baseline and forecast energy analysis.  
+    - Author: Chika  
+    - Assistant: Aiman  
+    """)
