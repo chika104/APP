@@ -1,230 +1,246 @@
 import streamlit as st
 import pandas as pd
-import numpy as np
-import plotly.express as px
-from sklearn.linear_model import LinearRegression
-from sklearn.metrics import r2_score
 import mysql.connector
+import hashlib
+import matplotlib.pyplot as plt
 
-# ---------------- PAGE CONFIG ----------------
-st.set_page_config(page_title="Smart Energy Forecasting", layout="wide")
-
-# ---------------- DB CONNECTION ----------------
+# ================================
+# DATABASE CONNECTION
+# ================================
 def get_connection():
-    try:
-        return mysql.connector.connect(
-            host=st.session_state.get("db_host", "switchback.proxy.rlwy.net"),
-            port=int(st.session_state.get("db_port", 55398)),
-            user=st.session_state.get("db_user", "root"),
-            password=st.session_state.get("db_password", "polrwgDJZnGLaungxPtGkOTaduCuolEj"),
-            database=st.session_state.get("db_database", "railway")
-        )
-    except Exception as e:
-        st.error(f"Gagal sambung DB: {e}")
-        return None
+    return mysql.connector.connect(
+        host="switchback.proxy.rlwy.net",
+        user="root",
+        password="polrwgDJZnGLaungxPtGkOTaduCuolEj",
+        database="railway",
+        port=55398
+    )
 
-# Create user table if not exists
+# ================================
+# CREATE USER TABLE
+# ================================
 def create_user_table():
     conn = get_connection()
-    if conn:
+    c = conn.cursor()
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS user_accounts (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            username VARCHAR(100) UNIQUE,
+            password_hash VARCHAR(255)
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+# ================================
+# HASH FUNCTION
+# ================================
+def make_hash(password):
+    return hashlib.sha256(str.encode(password)).hexdigest()
+
+# ================================
+# ADD USER
+# ================================
+def add_user(username, password):
+    try:
+        conn = get_connection()
         c = conn.cursor()
-        c.execute("""
-            CREATE TABLE IF NOT EXISTS login_users (
-                id INT AUTO_INCREMENT PRIMARY KEY,
-                username VARCHAR(100) UNIQUE,
-                password VARCHAR(100)
-            )
-        """)
+        c.execute("INSERT INTO user_accounts (username, password_hash) VALUES (%s, %s)",
+                  (username, make_hash(password)))
         conn.commit()
         conn.close()
+        return True
+    except mysql.connector.Error as err:
+        st.error(f"DB error during registration: {err}")
+        return False
 
-def register_user(username, password):
+# ================================
+# LOGIN VALIDATION
+# ================================
+def login_user(username, password):
     conn = get_connection()
-    if conn:
-        try:
-            c = conn.cursor()
-            c.execute("INSERT INTO login_users (username, password) VALUES (%s, %s)", (username, password))
-            conn.commit()
-            conn.close()
-            return True
-        except Exception as e:
-            st.error(f"DB error during registration: {e}")
-            return False
-    return False
+    c = conn.cursor()
+    c.execute("SELECT * FROM user_accounts WHERE username=%s AND password_hash=%s",
+              (username, make_hash(password)))
+    result = c.fetchone()
+    conn.close()
+    return result
 
-def verify_login(username, password):
-    conn = get_connection()
-    if conn:
-        try:
-            c = conn.cursor()
-            c.execute("SELECT * FROM login_users WHERE username=%s AND password=%s", (username, password))
-            result = c.fetchone()
-            conn.close()
-            return result is not None
-        except Exception as e:
-            st.error(f"Login DB Error: {e}")
-            return False
-    return False
+# ================================
+# SETUP PAGE CONFIG
+# ================================
+st.set_page_config(page_title="Energy Forecast Dashboard", layout="wide")
 
-# ---------------- LOGIN SYSTEM ----------------
+# ================================
+# CSS STYLING (MENU & BACKGROUND)
+# ================================
+st.markdown("""
+    <style>
+    [data-testid="stSidebar"] {
+        background-color: black !important;
+        color: white !important;
+    }
+    [data-testid="stSidebar"] * {
+        color: white !important;
+    }
+    .main {
+        background-color: #1E1E1E;
+        color: white;
+    }
+    </style>
+""", unsafe_allow_html=True)
+
+# ================================
+# INITIALIZE SESSION STATE
+# ================================
+if "logged_in" not in st.session_state:
+    st.session_state.logged_in = False
+
+# ================================
+# LOGIN & REGISTER PAGE
+# ================================
 def login_page():
-    st.title("🔐 User Login")
+    st.title("🔒 Secure Login System")
+    menu = ["Login", "Register"]
+    choice = st.radio("Select an option", menu, horizontal=True)
 
-    tab1, tab2 = st.tabs(["Login", "Register"])
-    with tab1:
-        uname = st.text_input("Username")
-        pword = st.text_input("Password", type="password")
+    if choice == "Login":
+        username = st.text_input("Username")
+        password = st.text_input("Password", type="password")
         if st.button("Login"):
-            if verify_login(uname, pword):
+            if login_user(username, password):
                 st.session_state.logged_in = True
-                st.session_state.username = uname
-                st.success(f"Welcome back, {uname}!")
+                st.session_state.username = username
+                st.success("Login successful!")
                 st.rerun()
             else:
-                st.error("Nama pengguna atau kata laluan salah!")
+                st.error("Invalid username or password!")
 
-    with tab2:
-        new_uname = st.text_input("Create Username")
-        new_pword = st.text_input("Create Password", type="password")
+    elif choice == "Register":
+        new_user = st.text_input("New Username")
+        new_pass = st.text_input("New Password", type="password")
         if st.button("Register"):
-            if register_user(new_uname, new_pword):
-                st.success("Pendaftaran berjaya! Sila log masuk.")
+            if add_user(new_user, new_pass):
+                st.success("Account created successfully! You can now log in.")
             else:
-                st.error("Gagal daftar pengguna baharu.")
+                st.error("Registration failed!")
 
-# ---------------- MAIN APP ----------------
-def main_dashboard():
-    st.markdown("""
-        <style>
-        [data-testid="stSidebar"] {
-            background-color: #000000;
-        }
-        body {
-            background: linear-gradient(120deg, #f4f4f4, #eaeaea);
-        }
-        </style>
-    """, unsafe_allow_html=True)
+# ================================
+# ENERGY FORECAST PAGE
+# ================================
+def energy_forecast_page():
+    st.subheader("⚡ Energy Forecast Analysis")
+    st.markdown("Upload your CSV file or input data manually below:")
 
-    menu = st.sidebar.radio("📋 Menu",
-        ["🏠 Dashboard", "⚡ Energy Forecast", "💡 Device Management",
-         "📊 Reports", "⚙️ Settings", "❓ Help & About"])
+    upload = st.file_uploader("Upload CSV", type=["csv"])
+    if upload:
+        df = pd.read_csv(upload)
+    else:
+        st.info("Or manually enter data below:")
+        df = pd.DataFrame({
+            "Year": [2020, 2021, 2022],
+            "Baseline (kWh)": [1200, 1300, 1400],
+            "Forecast (kWh)": [1250, 1350, 1450]
+        })
 
-    # ========== DASHBOARD ==========
-    if menu == "🏠 Dashboard":
-        st.title("🏠 Dashboard — Smart Energy Forecasting")
-        st.write("Selamat datang, ", st.session_state.username)
+    st.dataframe(df)
 
-    # ========== ENERGY FORECAST ==========
-    elif menu == "⚡ Energy Forecast":
-        st.title("⚡ Energy Forecast Analysis")
+    # Graph 1: Baseline kWh
+    st.write("### Baseline Energy (kWh)")
+    plt.figure(figsize=(6,3))
+    plt.plot(df["Year"], df["Baseline (kWh)"], color="red", linewidth=2)
+    plt.xlabel("Year")
+    plt.ylabel("kWh")
+    plt.grid(True)
+    st.pyplot(plt)
 
-        input_mode = st.radio("Input Method", ["Upload CSV", "Manual Entry"])
-        df = None
+    # Graph 2: Baseline vs Forecast
+    st.write("### Baseline vs Forecast (kWh)")
+    plt.figure(figsize=(6,3))
+    plt.plot(df["Year"], df["Baseline (kWh)"], color="red", label="Baseline")
+    plt.plot(df["Year"], df["Forecast (kWh)"], color="blue", label="Forecast")
+    plt.legend()
+    st.pyplot(plt)
 
-        if input_mode == "Upload CSV":
-            file = st.file_uploader("Upload your baseline CSV", type=["csv"])
-            if file:
-                df = pd.read_csv(file)
-                df.columns = [c.lower().strip() for c in df.columns]
-        else:
-            rows = st.number_input("Number of rows", 1, 10, 5)
-            data = []
-            for i in range(rows):
-                c1, c2, c3 = st.columns(3)
-                with c1: year = st.number_input(f"Year {i+1}", 2000, 2100, 2020+i)
-                with c2: cons = st.number_input(f"Consumption (kWh) {i+1}", 0.0, 999999.0, 10000.0)
-                with c3: cost = st.number_input(f"Cost (RM) {i+1}", 0.0, 999999.0, 5200.0)
-                data.append({"year": year, "consumption": cons, "cost": cost})
-            df = pd.DataFrame(data)
+    # Graph 3: Baseline Cost
+    st.write("### Baseline Cost (RM)")
+    df["Baseline Cost (RM)"] = df["Baseline (kWh)"] * 0.2
+    plt.figure(figsize=(6,3))
+    plt.bar(df["Year"], df["Baseline Cost (RM)"], color="orange")
+    st.pyplot(plt)
 
-        if df is not None and not df.empty:
-            df["baseline_cost"] = np.where(df["cost"] == 0, df["consumption"] * 0.52, df["cost"])
-            st.subheader("Baseline Table")
-            st.dataframe(df)
+    # Graph 4: Baseline vs Forecast Cost
+    st.write("### Baseline vs Forecast Cost (RM)")
+    df["Forecast Cost (RM)"] = df["Forecast (kWh)"] * 0.2
+    plt.figure(figsize=(6,3))
+    plt.plot(df["Year"], df["Baseline Cost (RM)"], color="orange", label="Baseline Cost")
+    plt.plot(df["Year"], df["Forecast Cost (RM)"], color="purple", label="Forecast Cost")
+    plt.legend()
+    st.pyplot(plt)
 
-            # Model
-            model = LinearRegression()
-            model.fit(df[["year"]], df["consumption"])
-            years_future = [df["year"].max() + i for i in range(1, 6)]
-            forecast = model.predict(np.array(years_future).reshape(-1, 1))
-            forecast_df = pd.DataFrame({
-                "year": years_future,
-                "baseline_kwh": model.predict(np.array(years_future).reshape(-1, 1)),
-                "forecast_kwh": forecast * 0.95,
-            })
-            forecast_df["baseline_cost"] = forecast_df["baseline_kwh"] * 0.52
-            forecast_df["forecast_cost"] = forecast_df["forecast_kwh"] * 0.52
-            forecast_df["co2_forecast"] = forecast_df["forecast_kwh"] * 0.75
+    # Graph 5: CO₂ Forecast
+    st.write("### CO₂ Emission Forecast (kg)")
+    df["CO₂ Forecast (kg)"] = df["Forecast (kWh)"] * 0.233
+    plt.figure(figsize=(6,3))
+    plt.plot(df["Year"], df["CO₂ Forecast (kg)"], color="green", linewidth=2)
+    plt.xlabel("Year")
+    plt.ylabel("CO₂ (kg)")
+    st.pyplot(plt)
 
-            # Graphs
-            st.subheader("📊 Graphs")
-            st.plotly_chart(px.line(df, x="year", y="consumption", markers=True, title="Baseline kWh", line_color="red"))
-            st.plotly_chart(px.line(forecast_df, x="year", y=["baseline_kwh","forecast_kwh"],
-                                    title="Baseline vs Forecast kWh", color_discrete_sequence=["red","darkblue"]))
-            st.plotly_chart(px.bar(df, x="year", y="baseline_cost", title="Baseline Cost (RM)", color_discrete_sequence=["green"]))
-            st.plotly_chart(px.bar(forecast_df, x="year", y=["baseline_cost","forecast_cost"],
-                                   barmode="group", title="Baseline vs Forecast Cost", color_discrete_sequence=["orange","purple"]))
-            st.plotly_chart(px.area(forecast_df, x="year", y="co2_forecast", title="CO₂ Forecast", color_discrete_sequence=["grey"]))
+# ================================
+# OTHER MENU PAGES
+# ================================
+def dashboard_page():
+    st.subheader("📊 Dashboard Overview")
+    st.info("This is the main dashboard summary of the Energy Forecast system.")
 
-            # Auto save
-            try:
-                conn = get_connection()
-                if conn:
-                    c = conn.cursor()
-                    c.execute("""
-                        CREATE TABLE IF NOT EXISTS energy_data (
-                            id INT AUTO_INCREMENT PRIMARY KEY,
-                            year INT,
-                            consumption FLOAT,
-                            cost FLOAT,
-                            baseline_cost FLOAT
-                        )
-                    """)
-                    for _, row in df.iterrows():
-                        c.execute("INSERT INTO energy_data (year, consumption, cost, baseline_cost) VALUES (%s,%s,%s,%s)",
-                                  (int(row["year"]), float(row["consumption"]), float(row["cost"]), float(row["baseline_cost"])))
-                    conn.commit()
-                    conn.close()
-                    st.success("✅ Data saved to database.")
-            except Exception as e:
-                st.error(f"Database error: {e}")
-        else:
-            st.warning("Please upload or input your data.")
+def device_management_page():
+    st.subheader("🖥️ Device Management")
+    st.write("Manage connected IoT devices and sensors here.")
 
-    # ========== DEVICE MANAGEMENT ==========
-    elif menu == "💡 Device Management":
-        st.title("💡 Device Management")
-        st.info("Add or edit your energy devices.")
+def report_page():
+    st.subheader("📑 Reports & Data Export")
+    st.write("Generate and download forecast reports or summaries.")
 
-    # ========== REPORTS ==========
-    elif menu == "📊 Reports":
-        st.title("📊 Reports")
-        st.write("View and export historical energy data here.")
+def settings_page():
+    st.subheader("⚙️ Settings")
+    st.write("Customize theme, background, and user preferences here.")
 
-    # ========== SETTINGS ==========
-    elif menu == "⚙️ Settings":
-        st.title("⚙️ Settings")
-        st.session_state.db_host = st.text_input("DB Host", st.session_state.get("db_host", "switchback.proxy.rlwy.net"))
-        st.session_state.db_port = st.text_input("DB Port", st.session_state.get("db_port", "55398"))
-        st.session_state.db_user = st.text_input("DB User", st.session_state.get("db_user", "root"))
-        st.session_state.db_password = st.text_input("DB Password", st.session_state.get("db_password", "polrwgDJZnGLaungxPtGkOTaduCuolEj"), type="password")
-        st.session_state.db_database = st.text_input("DB Name", st.session_state.get("db_database", "railway"))
-        if st.button("Save"):
-            st.success("Settings saved!")
+def help_about_page():
+    st.subheader("❓ Help & About")
+    st.write("This Energy Forecast System is developed as part of your project demonstration.")
 
-    # ========== HELP & ABOUT ==========
-    elif menu == "❓ Help & About":
-        st.title("❓ Help & About")
-        st.markdown("""
-        **Smart Energy Forecasting System (Chika Edition)**  
-        Built for energy baseline, cost and CO₂ forecasting.  
-        - Developer: Chika  
-        - Assistant: Aiman  
-        """)
+# ================================
+# MAIN DASHBOARD STRUCTURE
+# ================================
+def main_app():
+    st.sidebar.title("Navigation Menu")
+    menu = ["Dashboard", "Energy Forecast", "Device Management", "Report", "Settings", "Help & About"]
+    choice = st.sidebar.radio("Go to", menu)
 
-# ---------------- MAIN EXEC ----------------
-if "logged_in" not in st.session_state:
-    create_user_table()
+    if choice == "Dashboard":
+        dashboard_page()
+    elif choice == "Energy Forecast":
+        energy_forecast_page()
+    elif choice == "Device Management":
+        device_management_page()
+    elif choice == "Report":
+        report_page()
+    elif choice == "Settings":
+        settings_page()
+    elif choice == "Help & About":
+        help_about_page()
+
+    st.sidebar.write("---")
+    if st.sidebar.button("Logout"):
+        st.session_state.logged_in = False
+        st.experimental_rerun()
+
+# ================================
+# RUN APP
+# ================================
+create_user_table()
+if not st.session_state.logged_in:
     login_page()
 else:
-    main_dashboard()
+    main_app()
