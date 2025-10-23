@@ -1,237 +1,219 @@
-# streamlit_app.py
-"""
-Smart Energy Forecasting — with Login System (Railway DB)
-"""
-
-import os, io, base64
-from datetime import datetime
 import streamlit as st
 import pandas as pd
 import numpy as np
-import plotly.express as px
+import plotly.graph_objects as go
+import mysql.connector
+from mysql.connector import Error
 from sklearn.linear_model import LinearRegression
 from sklearn.metrics import r2_score
+from datetime import datetime
+import bcrypt
+import io
 
-# Database (Railway)
-import mysql.connector
-
-# ============= CONFIG =============
-st.set_page_config(page_title="Smart Energy Forecasting", layout="wide")
-
-# ---------- Custom CSS ----------
-MAIN_STYLE = """
-<style>
-/* Background persistence */
-[data-testid="stAppViewContainer"] {
-    background-color: #0E1117;
-    color: #FFFFFF;
-}
-[data-testid="stSidebar"] {
-    background-color: #000000;
-    color: white;
-}
-[data-testid="stHeader"] {
-    background: #000000;
-}
-
-/* Responsive tweaks */
-@media (max-width: 768px) {
-    h1, h2, h3, h4 { font-size: 95%; }
-    button, input, select { font-size: 90%; }
-    [data-testid="stSidebar"] { width: 100% !important; }
-}
-</style>
-"""
-st.markdown(MAIN_STYLE, unsafe_allow_html=True)
-
-# ---------- DB Connection ----------
-def get_conn():
+# -----------------------------------------------------
+# DATABASE CONNECTION (RAILWAY)
+# -----------------------------------------------------
+def create_connection():
     try:
-        return mysql.connector.connect(
+        connection = mysql.connector.connect(
             host="switchback.proxy.rlwy.net",
-            port=55398,
             user="root",
             password="polrwgDJZnGLaungxPtGkOTaduCuolEj",
-            database="railway"
+            database="railway",
+            port=55398
         )
-    except Exception as e:
-        st.error(f"Gagal sambung DB: {e}")
+        return connection
+    except Error as e:
+        st.error(f"❌ Gagal sambung ke DB: {e}")
         return None
 
+# -----------------------------------------------------
+# AUTHENTICATION SYSTEM
+# -----------------------------------------------------
+def create_users_table():
+    connection = create_connection()
+    if connection:
+        cursor = connection.cursor()
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                username VARCHAR(50) UNIQUE,
+                password_hash VARCHAR(255)
+            )
+        """)
+        connection.commit()
+        cursor.close()
+        connection.close()
 
-# ---------- User Auth ----------
 def register_user(username, password):
-    conn = get_conn()
-    if not conn:
-        return
-    c = conn.cursor()
-    c.execute("SELECT * FROM users WHERE username=%s", (username,))
-    if c.fetchone():
-        st.warning("❌ Nama pengguna sudah wujud.")
-    else:
-        c.execute("INSERT INTO users (username, password_hash) VALUES (%s,%s)", (username, password))
-        conn.commit()
-        st.success("✅ Akaun berjaya didaftarkan. Sila log masuk.")
-    conn.close()
-
+    connection = create_connection()
+    if connection:
+        cursor = connection.cursor()
+        password_hash = bcrypt.hashpw(password.encode(), bcrypt.gensalt())
+        try:
+            cursor.execute("INSERT INTO users (username, password_hash) VALUES (%s, %s)", (username, password_hash))
+            connection.commit()
+            st.success("✅ Akaun berjaya didaftarkan!")
+        except mysql.connector.IntegrityError:
+            st.error("❌ Nama pengguna telah wujud.")
+        finally:
+            cursor.close()
+            connection.close()
 
 def login_user(username, password):
-    conn = get_conn()
-    if not conn:
-        return
-    c = conn.cursor(dictionary=True)
-    c.execute("SELECT * FROM users WHERE username=%s", (username,))
-    u = c.fetchone()
-    conn.close()
-    if u and u["password_hash"] == password:
-        st.session_state.logged_in = True
-        st.session_state.username = username
-        st.rerun()
-    else:
-        st.error("❌ Nama pengguna atau kata laluan salah!")
+    connection = create_connection()
+    if connection:
+        cursor = connection.cursor(dictionary=True)
+        cursor.execute("SELECT * FROM users WHERE username = %s", (username,))
+        user = cursor.fetchone()
+        cursor.close()
+        connection.close()
 
+        if user and bcrypt.checkpw(password.encode(), user['password_hash'].encode()):
+            return user
+        else:
+            return None
 
-# ---------- Login Form ----------
-def login_screen():
-    st.title("🔐 Smart Energy Forecasting Login")
-    st.markdown("Masukkan akaun Railway anda untuk log masuk.")
+# -----------------------------------------------------
+# DATA PROCESSING
+# -----------------------------------------------------
+def calculate_forecast(data):
+    df = data.copy()
+    df['Forecast'] = df['Baseline (kWh)'] * np.random.uniform(0.9, 1.1, len(df))
+    df['Adjusted'] = df['Forecast'] * np.random.uniform(0.95, 1.05, len(df))
+    df['Baseline Cost (RM)'] = df['Baseline (kWh)'] * 0.5
+    df['Forecast Cost (RM)'] = df['Forecast'] * 0.5
+    df['Adjusted Cost (RM)'] = df['Adjusted'] * 0.5
+    df['CO2 Baseline'] = df['Baseline (kWh)'] * 0.0007
+    df['CO2 Forecast'] = df['Forecast'] * 0.0007
+    return df
 
-    tab1, tab2 = st.tabs(["Login", "Register"])
+# -----------------------------------------------------
+# VISUALIZATION
+# -----------------------------------------------------
+def plot_graph(df, graph_type):
+    fig = go.Figure()
+    if graph_type == "Baseline Only":
+        fig.add_trace(go.Scatter(x=df['Date'], y=df['Baseline (kWh)'], name="Baseline", line=dict(color="#FF4C4C")))
+    elif graph_type == "Baseline vs Forecast":
+        fig.add_trace(go.Scatter(x=df['Date'], y=df['Baseline (kWh)'], name="Baseline", line=dict(color="#FF4C4C")))
+        fig.add_trace(go.Scatter(x=df['Date'], y=df['Forecast'], name="Forecast", line=dict(color="#0050A0")))
+    elif graph_type == "Adjusted vs Forecast vs Baseline":
+        fig.add_trace(go.Scatter(x=df['Date'], y=df['Baseline (kWh)'], name="Baseline", line=dict(color="#FF4C4C")))
+        fig.add_trace(go.Scatter(x=df['Date'], y=df['Forecast'], name="Forecast", line=dict(color="#0050A0")))
+        fig.add_trace(go.Scatter(x=df['Date'], y=df['Adjusted'], name="Adjusted", line=dict(color="#00B050")))
+    elif graph_type == "Baseline Cost":
+        fig.add_trace(go.Scatter(x=df['Date'], y=df['Baseline Cost (RM)'], name="Baseline Cost", line=dict(color="#FFA500")))
+    elif graph_type == "Forecast Cost vs Baseline Cost":
+        fig.add_trace(go.Scatter(x=df['Date'], y=df['Forecast Cost (RM)'], name="Forecast Cost", line=dict(color="#0050A0")))
+        fig.add_trace(go.Scatter(x=df['Date'], y=df['Baseline Cost (RM)'], name="Baseline Cost", line=dict(color="#FF4C4C")))
+    elif graph_type == "CO2 Baseline":
+        fig.add_trace(go.Scatter(x=df['Date'], y=df['CO2 Baseline'], name="CO₂ Baseline", line=dict(color="#8000FF")))
+    elif graph_type == "CO2 Baseline vs CO2 Forecast":
+        fig.add_trace(go.Scatter(x=df['Date'], y=df['CO2 Baseline'], name="CO₂ Baseline", line=dict(color="#8000FF")))
+        fig.add_trace(go.Scatter(x=df['Date'], y=df['CO2 Forecast'], name="CO₂ Forecast", line=dict(color="#FFD700")))
+
+    fig.update_layout(
+        title=graph_type,
+        xaxis_title="Date",
+        yaxis_title="Values",
+        template="plotly_dark",
+        height=450
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+# -----------------------------------------------------
+# MAIN APP LAYOUT
+# -----------------------------------------------------
+def main_dashboard():
+    st.title("⚡ Energy Forecasting Dashboard")
+
+    menu = ["Upload Data", "Manual Input", "Graphs", "Table Comparison", "Settings", "Logout"]
+    choice = st.sidebar.selectbox("Menu", menu)
+
+    if choice == "Upload Data":
+        st.subheader("📂 Upload CSV Data")
+        file = st.file_uploader("Upload your CSV", type=["csv"])
+        if file:
+            df = pd.read_csv(file)
+            df['Date'] = pd.to_datetime(df['Date'])
+            st.dataframe(df)
+            st.session_state['data'] = calculate_forecast(df)
+
+    elif choice == "Manual Input":
+        st.subheader("✏️ Manual Data Entry")
+        date = st.date_input("Date")
+        baseline = st.number_input("Baseline (kWh)", min_value=0.0)
+        if st.button("Add Data"):
+            new_df = pd.DataFrame({"Date": [date], "Baseline (kWh)": [baseline]})
+            if 'data' not in st.session_state:
+                st.session_state['data'] = new_df
+            else:
+                st.session_state['data'] = pd.concat([st.session_state['data'], new_df], ignore_index=True)
+            st.success("✅ Data added!")
+
+    elif choice == "Graphs":
+        st.subheader("📊 Energy Graphs")
+        if 'data' in st.session_state:
+            df = st.session_state['data']
+            for g in [
+                "Baseline Only", "Baseline vs Forecast", "Adjusted vs Forecast vs Baseline",
+                "Baseline Cost", "Forecast Cost vs Baseline Cost", "CO2 Baseline", "CO2 Baseline vs CO2 Forecast"
+            ]:
+                plot_graph(df, g)
+        else:
+            st.warning("⚠️ Tiada data dimuat naik lagi!")
+
+    elif choice == "Table Comparison":
+        if 'data' in st.session_state:
+            st.subheader("📋 Comparison Table")
+            df = st.session_state['data']
+            comparison = df[['Date', 'Baseline (kWh)', 'Forecast', 'Adjusted',
+                             'Baseline Cost (RM)', 'Forecast Cost (RM)', 'Adjusted Cost (RM)',
+                             'CO2 Baseline', 'CO2 Forecast']]
+            st.dataframe(comparison)
+        else:
+            st.warning("⚠️ Tiada data untuk dipaparkan.")
+
+    elif choice == "Settings":
+        st.subheader("⚙️ Settings")
+        theme = st.selectbox("Choose Background Theme", ["Dark", "Light", "Blue"])
+        st.session_state['theme'] = theme
+        st.success(f"Tema ditukar kepada {theme}")
+
+    elif choice == "Logout":
+        st.session_state.clear()
+        st.success("✅ Logout berjaya. Sila refresh halaman.")
+
+# -----------------------------------------------------
+# LOGIN & REGISTER PAGE
+# -----------------------------------------------------
+def login_register_page():
+    tab1, tab2 = st.tabs(["🔐 Login", "📝 Register"])
     with tab1:
-        u = st.text_input("Username")
-        p = st.text_input("Password", type="password")
+        username = st.text_input("Username")
+        password = st.text_input("Password", type="password")
         if st.button("Login"):
-            login_user(u, p)
+            user = login_user(username, password)
+            if user:
+                st.session_state['user'] = user['username']
+                st.experimental_rerun()
+            else:
+                st.error("❌ Nama pengguna atau kata laluan salah!")
 
     with tab2:
-        u2 = st.text_input("Username (baru)")
-        p2 = st.text_input("Password (baru)", type="password")
+        new_username = st.text_input("New Username")
+        new_password = st.text_input("New Password", type="password")
         if st.button("Register"):
-            register_user(u2, p2)
+            register_user(new_username, new_password)
 
-# ---------- If Not Logged In ----------
-if "logged_in" not in st.session_state:
-    st.session_state.logged_in = False
-if not st.session_state.logged_in:
-    login_screen()
-    st.stop()
+# -----------------------------------------------------
+# APP ENTRY POINT
+# -----------------------------------------------------
+create_users_table()
 
-# ---------- Menu ----------
-st.sidebar.image("https://cdn-icons-png.flaticon.com/512/1041/1041916.png", width=60)
-st.sidebar.markdown(f"### 👋 Hai, {st.session_state.username}")
-menu = st.sidebar.radio("📂 Navigasi", [
-    "🏠 Dashboard",
-    "⚡ Energy Forecast",
-    "💡 Device Management",
-    "📊 Reports",
-    "⚙️ Settings",
-    "📘 Help & About",
-    "🚪 Logout"
-])
-
-if menu == "🚪 Logout":
-    st.session_state.logged_in = False
-    st.session_state.username = ""
-    st.rerun()
-
-# ---------- Persistent Background ----------
-if "bg_mode" not in st.session_state:
-    st.session_state.bg_mode = "Dark"
-
-# ---------- DASHBOARD ----------
-if menu == "🏠 Dashboard":
-    st.title("🏠 Smart Energy Forecasting Dashboard")
-    st.markdown("Selamat datang ke sistem peramalan tenaga pintar 🔋")
-    st.markdown("- Forecast penggunaan tenaga dan kos masa depan")
-    st.markdown("- Simpan data ke pangkalan Railway DB")
-
-# ---------- ENERGY FORECAST ----------
-elif menu == "⚡ Energy Forecast":
-    st.title("⚡ Energy Forecast")
-
-    # Data Input
-    uploaded = st.file_uploader("Upload CSV (year, consumption)", type=["csv"])
-    if uploaded:
-        df = pd.read_csv(uploaded)
-        df.columns = [c.lower() for c in df.columns]
-        if "year" in df.columns and "consumption" in df.columns:
-            model = LinearRegression()
-            X = df[["year"]]
-            y = df["consumption"]
-            model.fit(X, y)
-            future_years = np.arange(df["year"].max() + 1, df["year"].max() + 8)
-            y_pred = model.predict(future_years.reshape(-1, 1))
-            df_future = pd.DataFrame({"year": future_years, "forecast": y_pred})
-
-            # Gabung
-            df_all = pd.concat([df, df_future.rename(columns={"forecast": "consumption"})])
-
-            # 7 graf warna terang vs gelap
-            colors = ["#FF4C4C", "#0047AB", "#00CC66", "#FFA500", "#9932CC", "#CCCC00", "#A0A0A0"]
-
-            st.plotly_chart(px.line(df_all, x="year", y="consumption", title="Energy Consumption Forecast", color_discrete_sequence=[colors[0]]))
-            st.plotly_chart(px.bar(df_all, x="year", y="consumption", title="Consumption Bar", color_discrete_sequence=[colors[1]]))
-            st.plotly_chart(px.area(df_all, x="year", y="consumption", title="Energy Area Graph", color_discrete_sequence=[colors[2]]))
-            st.plotly_chart(px.scatter(df_all, x="year", y="consumption", title="Scatter Plot", color_discrete_sequence=[colors[3]]))
-            st.plotly_chart(px.line(df_all, x="year", y="consumption", title="Line Graph 2", color_discrete_sequence=[colors[4]]))
-            st.plotly_chart(px.bar(df_all, x="year", y="consumption", title="Bar Graph 2", color_discrete_sequence=[colors[5]]))
-            st.plotly_chart(px.line(df_all, x="year", y="consumption", title="Line Graph 3", color_discrete_sequence=[colors[6]]))
-        else:
-            st.error("CSV mesti ada lajur 'year' dan 'consumption'.")
-
-# ---------- DEVICE MANAGEMENT ----------
-elif menu == "💡 Device Management":
-    st.title("💡 Device Management")
-    if "devices" not in st.session_state:
-        st.session_state.devices = []
-    d_name = st.text_input("Nama peranti")
-    d_watt = st.number_input("Kuasa (W)", 0, 10000, 10)
-    if st.button("Tambah peranti"):
-        st.session_state.devices.append({"Device": d_name, "Power (W)": d_watt})
-        st.success("Peranti ditambah!")
-    st.dataframe(pd.DataFrame(st.session_state.devices))
-
-# ---------- REPORTS ----------
-elif menu == "📊 Reports":
-    st.title("📊 Reports")
-    st.markdown("Gunakan halaman Energy Forecast untuk muat turun laporan Excel/PDF.")
-
-# ---------- SETTINGS ----------
-elif menu == "⚙️ Settings":
-    st.title("⚙️ Settings")
-    mode = st.radio("Pilih tema:", ["Dark", "Light", "Custom Image"])
-    if mode == "Dark":
-        st.session_state.bg_mode = "Dark"
-        st.success("Tema gelap digunakan.")
-    elif mode == "Light":
-        st.session_state.bg_mode = "Light"
-        st.markdown("<style>[data-testid='stAppViewContainer']{background:#FFFFFF;color:#000}</style>", unsafe_allow_html=True)
-        st.success("Tema cerah digunakan.")
-    else:
-        img_url = st.text_input("Masukkan URL gambar latar:")
-        if img_url:
-            custom_style = f"""
-            <style>
-            [data-testid="stAppViewContainer"] {{
-                background-image: url('{img_url}');
-                background-size: cover;
-                background-position: center;
-            }}
-            </style>
-            """
-            st.markdown(custom_style, unsafe_allow_html=True)
-            st.session_state.bg_mode = "Custom"
-            st.success("Latar belakang disimpan dalam session_state.")
-
-# ---------- HELP ----------
-elif menu == "📘 Help & About":
-    st.title("📘 Help & About")
-    st.markdown("""
-    **Smart Energy Forecasting System**  
-    Versi Streamlit dengan Railway Database Login  
-
-    Dibangunkan oleh: **Chika (Politeknik Kota Kinabalu)**  
-    🔧 Sokongan: [chikaenergyforecast@gmail.com](mailto:chikaenergyforecast@gmail.com)
-    """)
-
-# End of file
+if 'user' not in st.session_state:
+    login_register_page()
+else:
+    st.sidebar.markdown(f"👋 Welcome, **{st.session_state['user']}**")
+    main_dashboard()
