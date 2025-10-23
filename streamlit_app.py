@@ -1,230 +1,199 @@
 import streamlit as st
-import pandas as pd
 import mysql.connector
 from mysql.connector import Error
-import matplotlib.pyplot as plt
+import bcrypt
 
-# -------------------------------
-# 🔧 DATABASE CONNECTION
-# -------------------------------
-def connect_db():
+# ========================
+# DATABASE CONNECTION
+# ========================
+def get_connection():
     try:
-        conn = mysql.connector.connect(
-            host="switchback.proxy.rlwy.net",
-            port=55398,
-            user="root",
-            password="polrwgDJZnGLaungxPtGkOTaduCuolEj",
-            database="railway"
+        return mysql.connector.connect(
+            host=st.secrets["DB_HOST"],
+            user=st.secrets["DB_USER"],
+            password=st.secrets["DB_PASSWORD"],
+            database=st.secrets["DB_NAME"]
         )
-        return conn
     except Error as e:
         st.error(f"DB connection failed: {e}")
         return None
 
-# -------------------------------
-# 🔐 USER MANAGEMENT
-# -------------------------------
+
+# ========================
+# CREATE USER TABLE (AUTO)
+# ========================
 def create_user_table():
-    conn = connect_db()
+    conn = get_connection()
     if conn:
-        try:
-            c = conn.cursor()
-            c.execute("""
-                CREATE TABLE IF NOT EXISTS user_accounts (
-                    id INT AUTO_INCREMENT PRIMARY KEY,
-                    username VARCHAR(255) UNIQUE NOT NULL,
-                    password VARCHAR(255) NOT NULL
-                )
-            """)
-            conn.commit()
-        except Error as e:
-            st.error(f"Error creating user_accounts table: {e}")
-        finally:
-            conn.close()
+        c = conn.cursor()
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS user_accounts (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                username VARCHAR(50) UNIQUE NOT NULL,
+                password_hash VARCHAR(255) NOT NULL
+            )
+        """)
+        conn.commit()
+        c.close()
+        conn.close()
 
+
+# ========================
+# REGISTER USER
+# ========================
 def register_user(username, password):
-    conn = connect_db()
+    conn = get_connection()
     if conn:
         try:
             c = conn.cursor()
-            create_user_table()
-            c.execute("INSERT INTO user_accounts (username, password) VALUES (%s, %s)", (username, password))
+            hashed_pw = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt())
+            c.execute("INSERT INTO user_accounts (username, password_hash) VALUES (%s, %s)", (username, hashed_pw))
             conn.commit()
-            st.success("✅ Registration successful!")
-        except mysql.connector.Error as err:
-            st.error(f"DB error during registration: {err}")
+            st.success("Pendaftaran berjaya! Anda boleh log masuk sekarang.")
+        except Error as e:
+            st.error(f"DB error during registration: {e}")
         finally:
+            c.close()
             conn.close()
-    else:
-        st.error("DB connection failed.")
 
+
+# ========================
+# LOGIN USER
+# ========================
 def login_user(username, password):
-    conn = connect_db()
+    conn = get_connection()
     if conn:
         try:
-            c = conn.cursor()
-            c.execute("SELECT * FROM user_accounts WHERE username=%s AND password=%s", (username, password))
+            c = conn.cursor(dictionary=True)
+            c.execute("SELECT * FROM user_accounts WHERE username = %s", (username,))
             user = c.fetchone()
-            return user
-        except mysql.connector.Error as err:
-            st.error(f"DB error during login: {err}")
-        finally:
-            conn.close()
-    return None
-
-# -------------------------------
-# 🎨 APP STYLE (BLACK MENU BAR)
-# -------------------------------
-st.markdown("""
-    <style>
-        [data-testid="stSidebar"] {
-            background-color: #000000;
-        }
-        [data-testid="stSidebar"] * {
-            color: white;
-        }
-        [data-testid="stAppViewContainer"] {
-            background-size: cover;
-            background-attachment: fixed;
-        }
-        .stButton>button {
-            border-radius: 8px;
-            background-color: #333;
-            color: white;
-        }
-    </style>
-""", unsafe_allow_html=True)
-
-# -------------------------------
-# 🌈 BACKGROUND & SESSION
-# -------------------------------
-if "bg_url" not in st.session_state:
-    st.session_state.bg_url = "https://images.unsplash.com/photo-1504384308090-c894fdcc538d"
-
-if "logged_in" not in st.session_state:
-    st.session_state.logged_in = False
-
-st.markdown(
-    f"""
-    <style>
-        [data-testid="stAppViewContainer"] {{
-            background-image: url("{st.session_state.bg_url}");
-        }}
-    </style>
-    """,
-    unsafe_allow_html=True
-)
-
-# -------------------------------
-# 🔑 LOGIN PAGE
-# -------------------------------
-def login_page():
-    st.title("🔐 Login to Dashboard")
-    username = st.text_input("Username")
-    password = st.text_input("Password", type="password")
-    col1, col2 = st.columns(2)
-    with col1:
-        if st.button("Login"):
-            user = login_user(username, password)
-            if user:
-                st.session_state.logged_in = True
-                st.session_state.username = username
-                st.rerun()
+            if user and bcrypt.checkpw(password.encode('utf-8'), user['password_hash'].encode('utf-8')):
+                return True
             else:
-                st.error("❌ Nama pengguna atau kata laluan salah!")
-    with col2:
-        if st.button("Register"):
-            register_user(username, password)
+                return False
+        except Error as e:
+            st.error(f"Login failed: {e}")
+        finally:
+            c.close()
+            conn.close()
+    return False
 
-# -------------------------------
-# 📊 DASHBOARD CONTENT
-# -------------------------------
-def dashboard():
-    st.title(f"📈 Welcome, {st.session_state.username}")
-    st.write("Energy Forecast Dashboard")
 
-def data_input():
-    st.title("📥 Data Input")
-    st.write("Masukkan data manual atau muat naik CSV.")
+# ========================
+# MAIN APP
+# ========================
+def main():
+    st.set_page_config(page_title="Secure Dashboard", layout="wide")
 
-    uploaded = st.file_uploader("Upload CSV file", type=["csv"])
-    if uploaded is not None:
-        df = pd.read_csv(uploaded)
-        st.session_state["data"] = df
-        st.success("✅ Data berjaya dimuat naik dan disimpan!")
-    else:
-        data = st.text_area("Masukkan data secara manual (contoh: tarikh, penggunaan)")
-        if st.button("Simpan Data Manual") and data:
-            df = pd.DataFrame({"Data": [data]})
-            st.session_state["data"] = df
-            st.success("✅ Data manual berjaya disimpan!")
+    # Auto create table
+    create_user_table()
 
-def comparison_table():
-    st.title("📊 Comparison Table")
-    if "data" in st.session_state:
-        st.dataframe(st.session_state["data"])
-    else:
-        st.info("Tiada data untuk dibandingkan.")
+    # Background style
+    st.markdown("""
+        <style>
+            body {
+                background-color: #0a0a0a;
+                color: white;
+            }
+            .block-container {
+                padding-top: 2rem;
+                padding-bottom: 2rem;
+            }
+            input, textarea {
+                background-color: #1e1e1e !important;
+                color: white !important;
+            }
+            .stButton>button {
+                background-color: #007bff;
+                color: white;
+                border-radius: 10px;
+                font-weight: bold;
+            }
+            .stButton>button:hover {
+                background-color: #0056b3;
+            }
+        </style>
+    """, unsafe_allow_html=True)
 
-def baseline_table():
-    st.title("📘 Baseline Table")
-    if "data" in st.session_state:
-        st.dataframe(st.session_state["data"])
-    else:
-        st.info("Tiada data baseline tersedia.")
+    # Session state
+    if "logged_in" not in st.session_state:
+        st.session_state.logged_in = False
+    if "username" not in st.session_state:
+        st.session_state.username = ""
 
-def energy_forecast():
-    st.title("⚡ Energy Forecast Graphs")
+    # Login / Register
+    menu = ["Login", "Register"]
+    choice = st.sidebar.selectbox("Menu", menu)
 
-    graphs = [
-        "Baseline Only",
-        "Baseline vs Forecast",
-        "Adjusted vs Forecast vs Baseline",
-        "Baseline Cost",
-        "Forecast Cost vs Baseline Cost",
-        "CO2 Baseline",
-        "CO2 Baseline vs CO2 Forecast"
-    ]
+    if not st.session_state.logged_in:
+        if choice == "Login":
+            st.title("🔐 Secure Login")
+            username = st.text_input("Username")
+            password = st.text_input("Password", type="password")
 
-    colors = ["red", "blue", "green", "orange", "purple", "grey", "darkblue"]
+            if st.button("Login"):
+                if login_user(username, password):
+                    st.session_state.logged_in = True
+                    st.session_state.username = username
+                    st.success(f"Selamat datang, {username}!")
+                else:
+                    st.error("Nama pengguna atau kata laluan salah!")
 
-    for i, title in enumerate(graphs):
-        st.subheader(title)
-        x = range(1, 11)
-        y = [v * (i + 1) for v in x]
-        plt.figure()
-        plt.plot(x, y, color=colors[i], label=title)
-        plt.legend()
-        st.pyplot(plt)
+        elif choice == "Register":
+            st.title("📝 Pendaftaran Akaun Baru")
+            new_username = st.text_input("Username Baharu")
+            new_password = st.text_input("Kata Laluan Baharu", type="password")
+            if st.button("Daftar"):
+                if new_username and new_password:
+                    register_user(new_username, new_password)
+                else:
+                    st.warning("Sila isi semua ruangan!")
 
-def settings_page():
-    st.title("⚙️ Settings")
-    st.write("Tukar latar belakang dashboard.")
-    new_bg = st.text_input("Masukkan URL imej latar belakang:")
-    if st.button("Tukar Background"):
-        st.session_state.bg_url = new_bg
-        st.rerun()
+    # ========================
+    # DASHBOARD
+    # ========================
+    if st.session_state.logged_in:
+        st.sidebar.success(f"Log masuk sebagai: {st.session_state.username}")
+        if st.sidebar.button("Logout"):
+            st.session_state.logged_in = False
+            st.experimental_rerun()
 
-# -------------------------------
-# 🚪 MAIN LOGIC
-# -------------------------------
-if not st.session_state.logged_in:
-    login_page()
-else:
-    menu = st.sidebar.radio(
-        "Menu",
-        ["Dashboard", "Data Input", "Comparison Table", "Baseline Table", "Energy Forecast", "Settings"]
-    )
+        st.title("📊 Dashboard Utama")
+        st.markdown("Selamat datang ke sistem ramalan tenaga ⚡")
 
-    if menu == "Dashboard":
-        dashboard()
-    elif menu == "Data Input":
-        data_input()
-    elif menu == "Comparison Table":
-        comparison_table()
-    elif menu == "Baseline Table":
-        baseline_table()
-    elif menu == "Energy Forecast":
-        energy_forecast()
-    elif menu == "Settings":
-        settings_page()
+        # Contoh: pengguna masukkan data CSV/manual
+        upload = st.file_uploader("Muat naik fail CSV (opsyenal)")
+        if upload:
+            import pandas as pd
+            df = pd.read_csv(upload)
+            st.dataframe(df)
+
+            # Simpan automatik ke DB
+            conn = get_connection()
+            if conn:
+                try:
+                    c = conn.cursor()
+                    for _, row in df.iterrows():
+                        c.execute(
+                            "INSERT INTO user_data (col1, col2, col3) VALUES (%s, %s, %s)",
+                            tuple(row)
+                        )
+                    conn.commit()
+                    st.success("✅ Data berjaya disimpan ke DB.")
+                except Error as e:
+                    st.error(f"Gagal simpan data ke DB: {e}")
+                finally:
+                    c.close()
+                    conn.close()
+
+        # Table comparison (contoh baseline)
+        st.subheader("📈 Table Comparison")
+        st.table({
+            "Model": ["Baseline", "Forecast"],
+            "Accuracy": ["85%", "93%"],
+            "Loss": ["0.15", "0.07"]
+        })
+
+
+if __name__ == "__main__":
+    main()
