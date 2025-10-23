@@ -1,27 +1,30 @@
 import streamlit as st
-import mysql.connector
 import pandas as pd
-import plotly.express as px
+import mysql.connector
+import matplotlib.pyplot as plt
+from mysql.connector import Error
 
-# ==============================
-# ⚙️ Database Connection Setup
-# ==============================
-DB_CONFIG = {
-    "host": "switchback.proxy.rlwy.net",
-    "port": 55398,
-    "user": "root",
-    "password": "polrwgDJZnGLaungxPtGkOTaduCuolEj",
-    "database": "railway"
-}
-
+# ================================
+# 🎯 DATABASE CONNECTION SETTINGS
+# ================================
 def get_connection():
     try:
-        conn = mysql.connector.connect(**DB_CONFIG)
+        conn = mysql.connector.connect(
+            host="switchback.proxy.rlwy.net",
+            port=55398,
+            user="root",
+            password="polrwgDJZnGLaungxPtGkOTaduCuolEj",
+            database="railway"
+        )
         return conn
-    except mysql.connector.Error as e:
-        st.error(f"❌ Gagal sambung DB: {e}")
+    except Error as e:
+        st.error(f"Gagal sambung DB: {e}")
         return None
 
+
+# ================================
+# 🔐 CREATE USERS TABLE (Auto Fix)
+# ================================
 def create_users_table():
     conn = get_connection()
     if conn:
@@ -30,16 +33,24 @@ def create_users_table():
             c.execute("""
                 CREATE TABLE IF NOT EXISTS users (
                     id INT AUTO_INCREMENT PRIMARY KEY,
-                    username VARCHAR(50) UNIQUE,
-                    password VARCHAR(100)
+                    username VARCHAR(50) UNIQUE
                 )
             """)
-            conn.commit()
+            # Tambah kolum password jika belum ada
+            c.execute("SHOW COLUMNS FROM users LIKE 'password'")
+            result = c.fetchone()
+            if not result:
+                c.execute("ALTER TABLE users ADD COLUMN password VARCHAR(100)")
+                conn.commit()
         except mysql.connector.Error as e:
-            st.error(f"Gagal cipta table users: {e}")
+            st.error(f"Gagal cipta/ubah table users: {e}")
         finally:
             conn.close()
 
+
+# ================================
+# 👥 REGISTER USER
+# ================================
 def register_user(username, password):
     conn = get_connection()
     if conn:
@@ -47,64 +58,78 @@ def register_user(username, password):
             c = conn.cursor()
             c.execute("INSERT INTO users (username, password) VALUES (%s, %s)", (username, password))
             conn.commit()
-            st.success("✅ Pendaftaran berjaya! Sila log masuk.")
+            st.success("Pendaftaran berjaya! Sila log masuk.")
         except mysql.connector.Error as e:
             st.error(f"Gagal register ke DB: {e}")
         finally:
             conn.close()
 
+
+# ================================
+# 🔑 LOGIN CHECK
+# ================================
 def login_user(username, password):
     conn = get_connection()
     if conn:
         try:
-            c = conn.cursor()
+            c = conn.cursor(dictionary=True)
             c.execute("SELECT * FROM users WHERE username=%s AND password=%s", (username, password))
-            return c.fetchone()
+            user = c.fetchone()
+            return user
         except mysql.connector.Error as e:
-            st.error(f"Gagal log masuk DB: {e}")
+            st.error(f"Gagal semak DB: {e}")
         finally:
             conn.close()
     return None
 
 
-# ============================================
-# 🎨 UI - Background, Theme & Persistent Style
-# ============================================
-st.markdown("""
-    <style>
-        body {
-            background-color: #0a0a0a;
-            color: white;
-        }
-        [data-testid="stSidebar"] {
-            background-color: #111 !important;
-        }
-        [data-testid="stSidebarNav"]::before {
-            color: white;
-            font-weight: bold;
-            font-size: 18px;
-            content: "⚡ Energy Forecast Dashboard";
-            margin-left: 10px;
-            margin-bottom: 20px;
-            display: block;
-        }
-    </style>
-""", unsafe_allow_html=True)
+# ================================
+# 🎨 APP SETTINGS
+# ================================
+st.set_page_config(page_title="Energy Forecast Dashboard", layout="wide")
 
-# ===========================
-# 🧭 Login & Register System
-# ===========================
-create_users_table()
+# Initialize session state
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
+if "user" not in st.session_state:
+    st.session_state.user = None
+if "bg_color" not in st.session_state:
+    st.session_state.bg_color = "#101010"  # default dark
+if "data" not in st.session_state:
+    st.session_state.data = pd.DataFrame()
 
+
+# ================================
+# 🌈 BACKGROUND STYLING
+# ================================
+def apply_bg():
+    st.markdown(
+        f"""
+        <style>
+        [data-testid="stAppViewContainer"] {{
+            background-color: {st.session_state.bg_color};
+            color: white;
+        }}
+        [data-testid="stSidebar"] {{
+            background-color: #000000 !important;
+        }}
+        </style>
+        """,
+        unsafe_allow_html=True
+    )
+
+
+# ================================
+# 🔐 LOGIN FORM
+# ================================
 def login_form():
-    st.subheader("🔐 User Login")
-    uname = st.text_input("Username")
-    pword = st.text_input("Password", type="password")
-    col1, col2 = st.columns(2)
-    with col1:
-        if st.button("Login"):
+    st.title("🔐 Log Masuk Dashboard")
+    tab1, tab2 = st.tabs(["Masuk", "Daftar"])
+
+    with tab1:
+        uname = st.text_input("Nama Pengguna")
+        pword = st.text_input("Kata Laluan", type="password")
+        if st.button("Log Masuk"):
             user = login_user(uname, pword)
             if user:
                 st.session_state.logged_in = True
@@ -112,135 +137,132 @@ def login_form():
                 st.rerun()
             else:
                 st.error("Nama pengguna atau kata laluan salah!")
-    with col2:
-        if st.button("Register"):
-            register_user(uname, pword)
 
-if not st.session_state.logged_in:
-    st.title("🔒 Welcome to Energy Forecast System")
-    login_form()
-    st.stop()
+    with tab2:
+        new_uname = st.text_input("Daftar Nama Pengguna")
+        new_pword = st.text_input("Daftar Kata Laluan", type="password")
+        if st.button("Daftar"):
+            register_user(new_uname, new_pword)
 
-# ===========================
-# 🧭 Sidebar Menu
-# ===========================
-menu = st.sidebar.radio("📂 Menu", [
-    "🏠 Dashboard",
-    "📊 Upload Data",
-    "📈 Forecast Graphs",
-    "📋 Table Comparison",
-    "⚙️ Settings",
-    "🚪 Logout"
-])
 
-# ===========================
-# 📊 Data Section
-# ===========================
-if "data" not in st.session_state:
-    st.session_state.data = pd.DataFrame()
-
-# ==================================
-# MENU 1: DASHBOARD
-# ==================================
-if menu == "🏠 Dashboard":
+# ================================
+# 📈 DASHBOARD PAGE
+# ================================
+def dashboard():
     st.title("⚡ Energy Forecast Dashboard")
-    st.write("Welcome,", st.session_state.user)
-    st.success("This dashboard shows your energy forecasting data and insights.")
 
-# ==================================
-# MENU 2: UPLOAD DATA
-# ==================================
-elif menu == "📊 Upload Data":
-    st.header("📊 Upload or Input Data")
-    uploaded_file = st.file_uploader("Upload CSV file", type=["csv"])
+    # Background changer
+    with st.sidebar:
+        new_color = st.color_picker("🎨 Tukar warna latar belakang", st.session_state.bg_color)
+        if new_color != st.session_state.bg_color:
+            st.session_state.bg_color = new_color
+            st.rerun()
 
-    if uploaded_file:
-        df = pd.read_csv(uploaded_file)
-        st.session_state.data = df
-        st.success("✅ Data successfully uploaded!")
+    st.markdown("### 📊 Data Input")
 
-    st.write("Or add manually:")
-    with st.form("manual_input"):
-        year = st.number_input("Year", min_value=2000, max_value=2100, step=1)
-        consumption = st.number_input("Consumption (kWh)")
-        baseline_cost = st.number_input("Baseline Cost (RM)")
-        forecast = st.number_input("Forecast (kWh)")
-        submit_btn = st.form_submit_button("Add Data")
-
-        if submit_btn:
+    data_mode = st.radio("Pilih cara masukkan data:", ["Manual", "Muat naik CSV"])
+    if data_mode == "Manual":
+        baseline = st.number_input("Baseline Energy (kWh)", min_value=0.0)
+        forecast = st.number_input("Forecast Energy (kWh)", min_value=0.0)
+        adjusted = st.number_input("Adjusted Energy (kWh)", min_value=0.0)
+        if st.button("Tambah Data"):
             new_row = pd.DataFrame({
-                "year": [year],
-                "consumption": [consumption],
-                "baseline_cost": [baseline_cost],
-                "forecast": [forecast]
+                "Baseline": [baseline],
+                "Forecast": [forecast],
+                "Adjusted": [adjusted]
             })
             st.session_state.data = pd.concat([st.session_state.data, new_row], ignore_index=True)
-            st.success("✅ Data added manually!")
+            st.success("Data berjaya ditambah!")
+    else:
+        file = st.file_uploader("Muat naik fail CSV", type=["csv"])
+        if file:
+            df = pd.read_csv(file)
+            st.session_state.data = df
+            st.success("Data CSV dimuat naik!")
 
     if not st.session_state.data.empty:
-        st.write("### Current Data Table")
+        st.markdown("### 📋 Jadual Baseline")
         st.dataframe(st.session_state.data)
 
-# ==================================
-# MENU 3: FORECAST GRAPHS
-# ==================================
-elif menu == "📈 Forecast Graphs":
-    st.header("📈 Energy Forecast Visualizations")
-    df = st.session_state.data
+        st.markdown("### 🔁 Jadual Perbandingan")
+        comparison = st.session_state.data.copy()
+        if "Baseline" in comparison and "Forecast" in comparison:
+            comparison["Perbezaan (%)"] = (
+                (comparison["Forecast"] - comparison["Baseline"]) / comparison["Baseline"]
+            ) * 100
+        st.dataframe(comparison)
 
-    if df.empty:
-        st.warning("Please upload or input data first.")
-    else:
-        graph_options = {
-            "Baseline Only": ("year", "consumption", "blue"),
-            "Baseline vs Forecast": ("year", ["consumption", "forecast"], ["red", "darkblue"]),
-            "Adjusted vs Forecast vs Baseline": ("year", ["consumption", "forecast", "baseline_cost"], ["orange", "green", "purple"]),
-            "Baseline Cost": ("year", "baseline_cost", "cyan"),
-            "Forecast vs Baseline Cost": ("year", ["forecast", "baseline_cost"], ["red", "blue"]),
-            "CO2 Baseline": ("year", "consumption", "gray"),
-            "CO2 Baseline vs CO2 Forecast": ("year", ["consumption", "forecast"], ["green", "purple"])
-        }
+        # ===== Graph Section =====
+        st.markdown("## 📈 Visualisasi Graf")
+        df = st.session_state.data
 
-        selected_graph = st.selectbox("Choose Graph", list(graph_options.keys()))
-        x_col, y_col, colors = graph_options[selected_graph]
+        fig1, ax1 = plt.subplots()
+        ax1.plot(df["Baseline"], color="red", label="Baseline")
+        ax1.set_title("Baseline")
+        st.pyplot(fig1)
 
-        if isinstance(y_col, list):
-            fig = px.line(df, x=x_col, y=y_col, color_discrete_sequence=colors, markers=True)
-        else:
-            fig = px.line(df, x=x_col, y=y_col, color_discrete_sequence=[colors], markers=True)
+        if "Forecast" in df:
+            fig2, ax2 = plt.subplots()
+            ax2.plot(df["Baseline"], color="red", label="Baseline")
+            ax2.plot(df["Forecast"], color="blue", label="Forecast")
+            ax2.legend()
+            ax2.set_title("Baseline vs Forecast")
+            st.pyplot(fig2)
 
-        fig.update_layout(
-            plot_bgcolor="#0a0a0a",
-            paper_bgcolor="#0a0a0a",
-            font_color="white"
-        )
-        st.plotly_chart(fig, use_container_width=True)
+        if "Adjusted" in df:
+            fig3, ax3 = plt.subplots()
+            ax3.plot(df["Baseline"], color="red", label="Baseline")
+            ax3.plot(df["Forecast"], color="blue", label="Forecast")
+            ax3.plot(df["Adjusted"], color="green", label="Adjusted")
+            ax3.legend()
+            ax3.set_title("Adjusted vs Forecast vs Baseline")
+            st.pyplot(fig3)
 
-# ==================================
-# MENU 4: TABLE COMPARISON
-# ==================================
-elif menu == "📋 Table Comparison":
-    st.header("📋 Data Comparison Table")
-    df = st.session_state.data
-    if not df.empty:
-        df["Forecast Error (%)"] = ((df["forecast"] - df["consumption"]) / df["consumption"]) * 100
-        st.dataframe(df)
-    else:
-        st.warning("Please upload or input data first.")
+        # Baseline Cost
+        fig4, ax4 = plt.subplots()
+        cost_baseline = df["Baseline"] * 0.5
+        ax4.plot(cost_baseline, color="orange", label="Baseline Cost")
+        ax4.legend()
+        ax4.set_title("Baseline Cost")
+        st.pyplot(fig4)
 
-# ==================================
-# MENU 5: SETTINGS
-# ==================================
-elif menu == "⚙️ Settings":
-    st.header("⚙️ User Settings")
-    bg_color = st.color_picker("Choose Background Color", "#0a0a0a")
-    st.session_state.bg_color = bg_color
-    st.markdown(f"<style>body{{background-color:{bg_color};}}</style>", unsafe_allow_html=True)
+        # Forecast vs Baseline Cost
+        if "Forecast" in df:
+            fig5, ax5 = plt.subplots()
+            cost_forecast = df["Forecast"] * 0.5
+            ax5.plot(cost_baseline, color="orange", label="Baseline Cost")
+            ax5.plot(cost_forecast, color="purple", label="Forecast Cost")
+            ax5.legend()
+            ax5.set_title("Forecast Cost vs Baseline Cost")
+            st.pyplot(fig5)
 
-# ==================================
-# MENU 6: LOGOUT
-# ==================================
-elif menu == "🚪 Logout":
-    st.session_state.logged_in = False
-    st.success("You have logged out.")
-    st.rerun()
+        # CO2 Baseline
+        fig6, ax6 = plt.subplots()
+        co2_baseline = df["Baseline"] * 0.8
+        ax6.plot(co2_baseline, color="gray", label="CO2 Baseline")
+        ax6.legend()
+        ax6.set_title("CO2 Baseline")
+        st.pyplot(fig6)
+
+        # CO2 Baseline vs Forecast
+        if "Forecast" in df:
+            fig7, ax7 = plt.subplots()
+            co2_forecast = df["Forecast"] * 0.8
+            ax7.plot(co2_baseline, color="gray", label="CO2 Baseline")
+            ax7.plot(co2_forecast, color="cyan", label="CO2 Forecast")
+            ax7.legend()
+            ax7.set_title("CO2 Baseline vs CO2 Forecast")
+            st.pyplot(fig7)
+
+
+# ================================
+# 🚀 MAIN APP
+# ================================
+create_users_table()
+apply_bg()
+
+if not st.session_state.logged_in:
+    login_form()
+    st.stop()
+else:
+    dashboard()
