@@ -2,184 +2,184 @@ import streamlit as st
 import pandas as pd
 import mysql.connector
 from mysql.connector import Error
-import matplotlib.pyplot as plt
-import numpy as np
+import plotly.express as px
+import plotly.graph_objects as go
 
-# -------------------- CONFIGURATIONS --------------------
-st.set_page_config(page_title="Smart Energy Forecasting", layout="wide")
-
-DB_CONFIG = {
-    "host": "switchback.proxy.rlwy.net",
-    "port": 55398,
-    "user": "root",
-    "password": "polrwgDJZnGLaungxPtGkOTaduCuolEj",
-    "database": "railway"
-}
-
-# -------------------- DB CONNECTION --------------------
+# ======================
+# DB CONNECTION
+# ======================
 def get_connection():
     try:
-        conn = mysql.connector.connect(**DB_CONFIG)
+        conn = mysql.connector.connect(
+            host="switchback.proxy.rlwy.net",
+            port=55398,
+            user="root",
+            password="polrwgDJZnGLaungxPtGkOTaduCuolEj",
+            database="railway"
+        )
         return conn
     except Error as e:
-        st.error(f"❌ Gagal sambung DB: {e}")
+        st.error(f"Gagal sambung DB: {e}")
         return None
 
-# -------------------- USER AUTH --------------------
-def get_user(username):
+# ======================
+# LOGIN SYSTEM
+# ======================
+def login(username, password):
     conn = get_connection()
     if conn:
-        cursor = conn.cursor(dictionary=True)
-        cursor.execute("SELECT * FROM users WHERE username = %s", (username,))
-        user = cursor.fetchone()
+        cur = conn.cursor(dictionary=True)
+        cur.execute("SELECT * FROM users WHERE username = %s", (username,))
+        user = cur.fetchone()
         conn.close()
-        return user
-    return None
-
-def register_user(username, password):
-    conn = get_connection()
-    if conn:
-        cursor = conn.cursor()
-        cursor.execute("INSERT INTO users (username, password_hash) VALUES (%s, %s)", (username, password))
-        conn.commit()
-        conn.close()
-        return True
+        if user and user["password_hash"] == password:
+            return True
     return False
 
-# -------------------- BACKGROUND STYLE --------------------
-if "bg_style" not in st.session_state:
-    st.session_state.bg_style = "black"
+def register(username, password):
+    conn = get_connection()
+    if conn:
+        cur = conn.cursor()
+        cur.execute("SELECT * FROM users WHERE username = %s", (username,))
+        existing = cur.fetchone()
+        if existing:
+            st.error("Nama pengguna sudah wujud.")
+        else:
+            cur.execute("INSERT INTO users (username, password_hash) VALUES (%s, %s)", (username, password))
+            conn.commit()
+            st.success("Pendaftaran berjaya! Sila log masuk.")
+        conn.close()
 
-def set_background(color):
-    st.markdown(
-        f"""
-        <style>
-        [data-testid="stSidebar"] {{
-            background-color: #000000;
-            color: white;
-        }}
-        [data-testid="stAppViewContainer"] {{
-            background-color: {color};
-            color: white;
-        }}
-        h1, h2, h3, h4, h5, h6, p, span, div {{
-            color: white !important;
-        }}
-        </style>
-        """,
-        unsafe_allow_html=True
-    )
-
-set_background(st.session_state.bg_style)
-
-# -------------------- LOGIN & REGISTER --------------------
-def login_register():
-    st.title("🔐 Please login to access the dashboard")
-    st.subheader("🔒 Secure Login")
-
-    tab_login, tab_register = st.tabs(["Login", "Register"])
-
-    with tab_login:
-        username = st.text_input("Username", key="login_user")
-        password = st.text_input("Password", type="password", key="login_pass")
-        if st.button("Login"):
-            user = get_user(username)
-            if user and user["password_hash"] == password:
-                st.session_state.logged_in = True
-                st.session_state.username = username
-                st.rerun()
-            else:
-                st.error("Nama pengguna atau kata laluan salah!")
-
-    with tab_register:
-        username_r = st.text_input("New Username", key="reg_user")
-        password_r = st.text_input("New Password", type="password", key="reg_pass")
-        if st.button("Register"):
-            user = get_user(username_r)
-            if user:
-                st.warning("Nama pengguna sudah wujud!")
-            else:
-                if register_user(username_r, password_r):
-                    st.success("Akaun berjaya didaftarkan! Sila login semula.")
-
-# -------------------- DASHBOARD MENU --------------------
-def sidebar_menu():
-    st.sidebar.title("💠 Smart Energy Forecasting")
-    menu = st.sidebar.radio(
-        "Navigate:",
-        ["🏠 Dashboard", "⚡ Energy Forecast", "💡 Device Management",
-         "📊 Reports", "⚙️ Settings", "❓ Help & About"]
-    )
-    return menu
-
-# -------------------- GRAPH FUNCTION --------------------
-def plot_graph(title, x, y, color, labelx, labely):
-    fig, ax = plt.subplots()
-    ax.plot(x, y, color=color, linewidth=3)
-    ax.set_title(title, color='white')
-    ax.set_xlabel(labelx)
-    ax.set_ylabel(labely)
-    ax.grid(True, linestyle='--', alpha=0.5)
-    fig.patch.set_facecolor('#111111')
-    ax.set_facecolor('#111111')
-    st.pyplot(fig)
-
-# -------------------- DASHBOARD CONTENT --------------------
-def dashboard():
-    st.header("📊 Dashboard Overview")
-    st.info(f"Welcome, {st.session_state.username}!")
-
-    x = np.arange(2020, 2027)
-    baseline = np.random.randint(300, 600, len(x))
-    forecast = baseline + np.random.randint(-100, 100, len(x))
-    adjusted = baseline - np.random.randint(0, 80, len(x))
-    cost_base = baseline * 0.25
-    cost_forecast = forecast * 0.25
-    co2_base = baseline * 0.3
-    co2_forecast = forecast * 0.3
-
-    plot_graph("Baseline Energy", x, baseline, "red", "Year", "kWh")
-    plot_graph("Baseline vs Forecast", x, forecast, "blue", "Year", "kWh")
-    plot_graph("Adjusted vs Forecast vs Baseline", x, adjusted, "orange", "Year", "kWh")
-    plot_graph("Baseline Cost", x, cost_base, "purple", "Year", "RM")
-    plot_graph("Forecast Cost vs Baseline Cost", x, cost_forecast, "green", "Year", "RM")
-    plot_graph("CO₂ Baseline", x, co2_base, "grey", "Year", "kgCO₂")
-    plot_graph("CO₂ Baseline vs Forecast", x, co2_forecast, "cyan", "Year", "kgCO₂")
-
-# -------------------- SETTINGS --------------------
-def settings():
-    st.header("⚙️ Settings")
-    color = st.color_picker("Pilih warna latar belakang:", st.session_state.bg_style)
-    if st.button("Tukar Latar Belakang"):
-        st.session_state.bg_style = color
-        st.rerun()
-    st.success("Warna latar belakang kekal walaupun tukar menu.")
-
-# -------------------- APP --------------------
+# ======================
+# APP STATE
+# ======================
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
 
+if "bg_mode" not in st.session_state:
+    st.session_state.bg_mode = "Dark"
+
+# ======================
+# PAGE CONFIG
+# ======================
+st.set_page_config(page_title="Smart Energy Forecasting", layout="wide")
+
+# ======================
+# CUSTOM CSS
+# ======================
+st.markdown("""
+<style>
+body {
+    background-color: #0e1117;
+    color: white;
+}
+[data-testid="stSidebar"] {
+    background-color: black !important;
+    color: white !important;
+}
+.menu-item {
+    padding: 10px;
+    color: white;
+    font-weight: 600;
+}
+.menu-item:hover {
+    background-color: #1a1a1a;
+    border-radius: 8px;
+}
+</style>
+""", unsafe_allow_html=True)
+
+# ======================
+# LOGIN PAGE
+# ======================
+def login_page():
+    st.title("🔐 Please login to access the dashboard")
+    st.subheader("🔒 Secure Login")
+    uname = st.text_input("Username", key="login_user")
+    pwd = st.text_input("Password", type="password", key="login_pass")
+
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("Login"):
+            if login(uname, pwd):
+                st.session_state.logged_in = True
+                st.session_state.username = uname
+                st.rerun()
+            else:
+                st.error("Nama pengguna atau kata laluan salah!")
+    with col2:
+        if st.button("Register"):
+            register(uname, pwd)
+
+# ======================
+# DASHBOARD MENU
+# ======================
+def navbar():
+    st.markdown("""
+        <div style='display:flex;justify-content:space-around;background-color:black;
+        padding:10px;border-radius:10px;'>
+            <a class='menu-item' href='#dashboard'>🏠 Dashboard</a>
+            <a class='menu-item' href='#energy'>⚡ Energy Forecast</a>
+            <a class='menu-item' href='#devices'>💡 Device Management</a>
+            <a class='menu-item' href='#reports'>📊 Reports</a>
+            <a class='menu-item' href='#settings'>⚙️ Settings</a>
+            <a class='menu-item' href='#help'>❓ Help & About</a>
+        </div>
+    """, unsafe_allow_html=True)
+
+# ======================
+# GRAPH FUNCTION
+# ======================
+def show_graphs():
+    st.header("📈 Energy Forecast Graphs")
+
+    years = list(range(2018, 2026))
+    baseline = [100, 120, 130, 140, 150, 160, 170, 180]
+    forecast = [110, 125, 135, 145, 160, 175, 185, 195]
+    adjusted = [90, 115, 125, 135, 140, 150, 160, 165]
+    baseline_cost = [x * 0.22 for x in baseline]
+    forecast_cost = [x * 0.22 for x in forecast]
+    co2_baseline = [x * 0.8 for x in baseline]
+    co2_forecast = [x * 0.7 for x in forecast]
+
+    # 7 Graphs
+    charts = {
+        "Baseline": go.Figure(go.Scatter(x=years, y=baseline, name="Baseline", line=dict(color="red"))),
+        "Baseline vs Forecast": go.Figure([
+            go.Scatter(x=years, y=baseline, name="Baseline", line=dict(color="red")),
+            go.Scatter(x=years, y=forecast, name="Forecast", line=dict(color="blue"))
+        ]),
+        "Adjusted vs Forecast vs Baseline": go.Figure([
+            go.Scatter(x=years, y=baseline, name="Baseline", line=dict(color="red")),
+            go.Scatter(x=years, y=forecast, name="Forecast", line=dict(color="blue")),
+            go.Scatter(x=years, y=adjusted, name="Adjusted", line=dict(color="green"))
+        ]),
+        "Baseline Cost": go.Figure(go.Scatter(x=years, y=baseline_cost, name="Baseline Cost", line=dict(color="orange"))),
+        "Forecast Cost vs Baseline Cost": go.Figure([
+            go.Scatter(x=years, y=baseline_cost, name="Baseline Cost", line=dict(color="orange")),
+            go.Scatter(x=years, y=forecast_cost, name="Forecast Cost", line=dict(color="purple"))
+        ]),
+        "CO2 Baseline": go.Figure(go.Scatter(x=years, y=co2_baseline, name="CO2 Baseline", line=dict(color="gray"))),
+        "CO2 Baseline vs Forecast": go.Figure([
+            go.Scatter(x=years, y=co2_baseline, name="CO2 Baseline", line=dict(color="gray")),
+            go.Scatter(x=years, y=co2_forecast, name="CO2 Forecast", line=dict(color="lightblue"))
+        ]),
+    }
+
+    for title, fig in charts.items():
+        fig.update_layout(title=title, template="plotly_dark", height=350)
+        st.plotly_chart(fig, use_container_width=True)
+
+# ======================
+# MAIN APP
+# ======================
 if not st.session_state.logged_in:
-    login_register()
+    login_page()
     st.stop()
-else:
-    menu = sidebar_menu()
 
-    if menu == "🏠 Dashboard":
-        dashboard()
-    elif menu == "⚡ Energy Forecast":
-        st.header("⚡ Energy Forecast Module")
-    elif menu == "💡 Device Management":
-        st.header("💡 Device Management")
-    elif menu == "📊 Reports":
-        st.header("📊 Reports Section")
-    elif menu == "⚙️ Settings":
-        settings()
-    elif menu == "❓ Help & About":
-        st.header("❓ Help & About")
-        st.info("Developed by Chika — Polytechnic Kota Kinabalu Project")
+navbar()
 
-    st.sidebar.write("---")
-    if st.sidebar.button("🚪 Logout"):
-        st.session_state.logged_in = False
-        st.rerun()
+st.title("🏠 Smart Energy Forecasting Dashboard")
+st.markdown(f"Welcome, **{st.session_state.username}** 👋")
+
+show_graphs()
