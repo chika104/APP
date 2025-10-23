@@ -1,236 +1,176 @@
-# streamlit_app.py
-"""
-Smart Energy Forecasting — with Secure Login (MySQL-based)
-Chika's Project Edition
-"""
-
 import streamlit as st
 import pandas as pd
-import numpy as np
-import os, io, base64
-from datetime import datetime
-from sklearn.linear_model import LinearRegression
-from sklearn.metrics import r2_score
-import plotly.express as px
+import mysql.connector
+from mysql.connector import Error
+import hashlib
 
-# Try MySQL
-MYSQL_AVAILABLE = True
-try:
-    import mysql.connector
-except Exception:
-    MYSQL_AVAILABLE = False
-
-# Page setup
-st.set_page_config(page_title="Smart Energy Forecasting", layout="wide")
-
-# ---------------------------
-# Default style (black sidebar background fix)
-# ---------------------------
-DEFAULT_STYLE = """
-<style>
-[data-testid="stSidebar"] {
-    background-color: #000000 !important;
-}
-[data-testid="stAppViewContainer"] {
-    background-color: #0E1117;
-    color: #F5F5F5;
-}
-[data-testid="stHeader"] {background: rgba(0,0,0,0);}
-</style>
-"""
-st.markdown(DEFAULT_STYLE, unsafe_allow_html=True)
-
-# ---------------------------
-# Database helpers
-# ---------------------------
-def get_db_conn():
-    if not MYSQL_AVAILABLE:
-        st.error("MySQL tidak disokong dalam environment ini.")
-        return None
+# ==============================
+# DATABASE CONNECTION
+# ==============================
+def create_connection():
     try:
         conn = mysql.connector.connect(
-            host=os.environ.get("DB_HOST", st.session_state.get("db_host", "localhost")),
-            user=os.environ.get("DB_USER", st.session_state.get("db_user", "root")),
-            password=os.environ.get("DB_PASSWORD", st.session_state.get("db_password", "")),
-            database=os.environ.get("DB_DATABASE", st.session_state.get("db_database", "energydb")),
-            port=int(os.environ.get("DB_PORT", st.session_state.get("db_port", 3306)))
+            host="switchback.proxy.rlwy.net",
+            user="root",
+            password="polrwgDJZnGLaungxPtGkOTaduCuolEj",
+            database="railway",
+            port=55398
         )
         return conn
-    except Exception as e:
+    except Error as e:
         st.error(f"Gagal sambung DB: {e}")
         return None
 
-def init_user_table():
-    conn = get_db_conn()
-    if not conn: return
-    cur = conn.cursor()
-    cur.execute("""
-    CREATE TABLE IF NOT EXISTS users (
-        id INT AUTO_INCREMENT PRIMARY KEY,
-        username VARCHAR(50) UNIQUE NOT NULL,
-        password VARCHAR(255) NOT NULL,
-        role VARCHAR(20) DEFAULT 'user',
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    )
-    """)
-    conn.commit()
-    conn.close()
 
-def check_user(username, password):
-    conn = get_db_conn()
-    if not conn: return False, None
-    cur = conn.cursor(dictionary=True)
-    cur.execute("SELECT * FROM users WHERE username=%s AND password=%s", (username, password))
-    user = cur.fetchone()
-    conn.close()
-    if user:
-        return True, user
-    return False, None
+# ==============================
+# USER AUTH FUNCTIONS
+# ==============================
+def make_hashes(password):
+    return hashlib.sha256(str.encode(password)).hexdigest()
 
-def register_user(username, password):
-    conn = get_db_conn()
-    if not conn: return False, "DB connection failed"
-    try:
-        cur = conn.cursor()
-        cur.execute("INSERT INTO users (username, password) VALUES (%s, %s)", (username, password))
+def check_hashes(password, hashed):
+    if make_hashes(password) == hashed:
+        return True
+    return False
+
+def create_usertable():
+    conn = create_connection()
+    if conn:
+        c = conn.cursor()
+        c.execute('''CREATE TABLE IF NOT EXISTS users(
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            username VARCHAR(50) UNIQUE,
+            password_hash VARCHAR(255)
+        )''')
         conn.commit()
         conn.close()
-        return True, "Pendaftaran berjaya! Anda boleh login sekarang."
-    except mysql.connector.IntegrityError:
-        return False, "Username sudah wujud!"
-    except Exception as e:
-        return False, str(e)
 
-# ---------------------------
-# Authentication UI
-# ---------------------------
-def login_ui():
-    st.title("🔐 Smart Energy Forecasting Login")
-    choice = st.radio("Pilih tindakan:", ["Login", "Daftar Akaun Baru"])
+def add_userdata(username, password):
+    conn = create_connection()
+    if conn:
+        c = conn.cursor()
+        c.execute('INSERT INTO users (username, password_hash) VALUES (%s, %s)', (username, make_hashes(password)))
+        conn.commit()
+        conn.close()
 
-    if choice == "Login":
-        username = st.text_input("Username")
-        password = st.text_input("Password", type="password")
-        if st.button("Login"):
-            success, user = check_user(username, password)
-            if success:
-                st.session_state.logged_in = True
-                st.session_state.username = user["username"]
-                st.success(f"Selamat datang, {user['username']}!")
-                st.rerun()
-            else:
-                st.error("Username atau password salah.")
+def login_user(username, password):
+    conn = create_connection()
+    if conn:
+        c = conn.cursor()
+        c.execute('SELECT * FROM users WHERE username=%s', (username,))
+        data = c.fetchone()
+        conn.close()
+        if data and check_hashes(password, data[2]):
+            return True
+    return False
 
-    else:
-        st.subheader("🆕 Daftar Akaun Baru")
-        new_user = st.text_input("Pilih Username")
-        new_pass = st.text_input("Pilih Password", type="password")
-        if st.button("Daftar"):
-            ok, msg = register_user(new_user, new_pass)
-            if ok:
-                st.success(msg)
-            else:
-                st.error(msg)
 
-# ---------------------------
-# Logout button
-# ---------------------------
-def logout_button():
-    st.sidebar.markdown("---")
-    if st.sidebar.button("🚪 Logout"):
-        st.session_state.logged_in = False
-        st.session_state.username = None
-        st.success("Anda telah log keluar.")
-        st.rerun()
+# ==============================
+# SETUP PAGE & BACKGROUND
+# ==============================
+st.set_page_config(page_title="Energy Forecasting Dashboard", layout="wide")
 
-# ---------------------------
-# Initialize
-# ---------------------------
-init_user_table()
-if "logged_in" not in st.session_state:
-    st.session_state.logged_in = False
+if "background_color" not in st.session_state:
+    st.session_state.background_color = "#0e1117"
 
-# ---------------------------
-# If not logged in → show login page
-# ---------------------------
-if not st.session_state.logged_in:
-    login_ui()
-    st.stop()
+page_bg = f"""
+<style>
+    [data-testid="stAppViewContainer"] {{
+        background-color: {st.session_state.background_color};
+        color: white;
+    }}
+    [data-testid="stSidebar"] {{
+        background-color: black;
+    }}
+</style>
+"""
+st.markdown(page_bg, unsafe_allow_html=True)
 
-# ---------------------------
-# Main app menu (only visible after login)
-# ---------------------------
-menu = st.sidebar.radio(
-    f"Selamat datang, {st.session_state.username}",
-    ["🏠 Dashboard", "⚡ Energy Forecast", "💡 Device Management", "📊 Reports", "⚙️ Settings", "❓ Help & About"]
-)
-logout_button()
 
-# ---------------------------
-# DASHBOARD
-# ---------------------------
-if menu == "🏠 Dashboard":
-    st.title("🏠 Smart Energy Forecasting Dashboard")
-    st.markdown("""
-    Selamat datang ke **Smart Energy Forecasting System**!
-    
-    Dari sini, anda boleh:
-    - Menjana ramalan penggunaan tenaga.
-    - Menambah faktor peranti.
-    - Memuat turun laporan dalam format PDF atau Excel.
-    """)
-    st.info("Gunakan menu di kiri untuk navigasi modul lain.")
+# ==============================
+# LOGIN / SIGNUP SYSTEM
+# ==============================
+menu = ["Login", "Sign Up"]
+choice = st.sidebar.selectbox("Menu", menu)
 
-# ---------------------------
-# ENERGY FORECAST (ringkas untuk contoh)
-# ---------------------------
-elif menu == "⚡ Energy Forecast":
-    st.title("⚡ Energy Forecast")
-    st.write("Bahagian ini memaparkan fungsi ramalan tenaga (versi penuh seperti sebelum ini).")
+create_usertable()
 
-# ---------------------------
-# DEVICE MANAGEMENT
-# ---------------------------
-elif menu == "💡 Device Management":
-    st.title("💡 Device Management")
-    st.write("Tambah atau urus peranti yang digunakan dalam ramalan.")
+if choice == "Sign Up":
+    st.title("🔐 User Registration")
+    new_user = st.text_input("Username")
+    new_password = st.text_input("Password", type="password")
+    if st.button("Create Account"):
+        if new_user and new_password:
+            try:
+                add_userdata(new_user, new_password)
+                st.success("✅ Account created successfully! Please login.")
+            except:
+                st.error("⚠️ Username already exists!")
+        else:
+            st.warning("Please fill in all fields.")
 
-# ---------------------------
-# REPORTS
-# ---------------------------
-elif menu == "📊 Reports":
-    st.title("📊 Reports")
-    st.write("Gunakan laporan ramalan untuk analisis prestasi tenaga anda.")
+elif choice == "Login":
+    st.title("🔑 Login to Dashboard")
+    username = st.text_input("Username")
+    password = st.text_input("Password", type="password")
 
-# ---------------------------
-# SETTINGS
-# ---------------------------
-elif menu == "⚙️ Settings":
-    st.title("⚙️ Settings")
-    st.markdown("Masukkan konfigurasi MySQL (simpan ke session).")
-    db_host = st.text_input("DB host", value=st.session_state.get("db_host","localhost"))
-    db_port = st.text_input("DB port", value=str(st.session_state.get("db_port","3306")))
-    db_user = st.text_input("DB user", value=st.session_state.get("db_user","root"))
-    db_password = st.text_input("DB password", value=st.session_state.get("db_password",""), type="password")
-    db_database = st.text_input("DB database", value=st.session_state.get("db_database","energydb"))
-    if st.button("Simpan DB Settings"):
-        st.session_state.db_host = db_host
-        st.session_state.db_port = db_port
-        st.session_state.db_user = db_user
-        st.session_state.db_password = db_password
-        st.session_state.db_database = db_database
-        st.success("Tetapan DB disimpan dalam session.")
+    if st.button("Login"):
+        if login_user(username, password):
+            st.session_state["authenticated"] = True
+            st.session_state["user"] = username
+            st.success(f"Welcome, {username}! Redirecting...")
+        else:
+            st.error("Incorrect Username/Password")
 
-# ---------------------------
-# HELP
-# ---------------------------
-elif menu == "❓ Help & About":
-    st.title("❓ Help & About")
-    st.markdown("""
-    **Smart Energy Forecasting System (Chika Edition)**  
-    Sistem ini direka untuk menjana ramalan tenaga, kos dan pelepasan CO₂.
+# ==============================
+# MAIN DASHBOARD
+# ==============================
+if "authenticated" in st.session_state and st.session_state["authenticated"]:
 
-    🔸 **Dibangunkan oleh:** Chika  
-    🔸 **Dibantu oleh:** Aiman  
-    🔸 **Fungsi:** Login selamat + MySQL penyimpanan pengguna & data ramalan.
-    """)
+    st.sidebar.title("📊 Dashboard Menu")
+    menu = ["Home", "Energy Forecast", "Database"]
+    selected = st.sidebar.radio("Go to", menu)
+
+    if selected == "Home":
+        st.title("🏠 Welcome to the Energy Forecasting Dashboard")
+        st.write("Manage and visualize your energy consumption efficiently.")
+        color = st.color_picker("🎨 Choose Background Color", st.session_state.background_color)
+        if color != st.session_state.background_color:
+            st.session_state.background_color = color
+            st.experimental_rerun()
+
+    elif selected == "Energy Forecast":
+        st.title("⚡ Energy Forecasting System")
+
+        if "forecast_data" not in st.session_state:
+            st.session_state.forecast_data = pd.DataFrame(columns=["Year", "Consumption (kWh)", "Cost (RM)", "Forecast (kWh)"])
+
+        year = st.number_input("Enter Year", min_value=2000, max_value=2100, step=1)
+        consumption = st.number_input("Energy Consumption (kWh)", min_value=0.0)
+        cost = st.number_input("Estimated Cost (RM)", min_value=0.0)
+        forecast = st.number_input("Forecast (kWh)", min_value=0.0)
+
+        if st.button("Save Record"):
+            new_row = {"Year": year, "Consumption (kWh)": consumption, "Cost (RM)": cost, "Forecast (kWh)": forecast}
+            st.session_state.forecast_data = pd.concat([st.session_state.forecast_data, pd.DataFrame([new_row])], ignore_index=True)
+            st.success("✅ Record added successfully!")
+
+        st.dataframe(st.session_state.forecast_data)
+
+    elif selected == "Database":
+        st.title("🗄️ Database Viewer")
+        conn = create_connection()
+        if conn:
+            c = conn.cursor()
+            c.execute("SHOW TABLES")
+            tables = [x[0] for x in c.fetchall()]
+            st.write("Available tables:", tables)
+            if tables:
+                table_choice = st.selectbox("Select a table to view", tables)
+                if st.button("Load Table"):
+                    df = pd.read_sql(f"SELECT * FROM {table_choice}", conn)
+                    st.dataframe(df)
+            conn.close()
+
+else:
+    st.info("👈 Please login from the sidebar to access the dashboard.")
