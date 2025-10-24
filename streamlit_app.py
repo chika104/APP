@@ -1,29 +1,27 @@
-# streamlit_app.py
 """
-Smart Energy Forecasting — Full Streamlit App with optional MySQL saving
-Features included:
+Smart Energy Forecasting — Full Streamlit App
+Features:
 - Theme selector (Dark/Light/Custom image)
-- Menu navigation: Dashboard, Energy Forecast, Device Management, Reports, Settings, Help & About
+- Menu navigation: Dashboard, Energy Forecast, Device Management, Reports, Settings, Help
 - Input: Upload CSV or Manual entry
 - Adjustment factors, forecast (LinearRegression)
 - Model accuracy (R^2)
-- Graphs (5 total), Excel export, optional PDF export (reportlab)
+- Graphs, Excel export, optional PDF export
 - Optional MySQL connection: configure in Settings, test connection, Save results to DB
 """
-
 import os
 import io
 from datetime import datetime
-import base64
 
 import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.express as px
+
 from sklearn.linear_model import LinearRegression
 from sklearn.metrics import r2_score
 
-# Optional PDF
+# PDF optional
 REPORTLAB_AVAILABLE = False
 try:
     from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image as RLImage
@@ -31,7 +29,7 @@ try:
     from reportlab.lib import colors
     from reportlab.lib.pagesizes import A4
     REPORTLAB_AVAILABLE = True
-except:
+except Exception:
     REPORTLAB_AVAILABLE = False
 
 # Plotly image backend
@@ -40,22 +38,23 @@ try:
     import plotly.io as pio
     pio.kaleido.scope.default_format = "png"
     PLOTLY_IMG_OK = True
-except:
-    pass
+except Exception:
+    PLOTLY_IMG_OK = False
 
-# Optional MySQL
+# MySQL optional
 MYSQL_AVAILABLE = True
 try:
     import mysql.connector
-except:
+except Exception:
     MYSQL_AVAILABLE = False
 
 EXCEL_ENGINE = "xlsxwriter"
 
 # -------------------------
-# Page config and theme
+# Page config and default theme
 # -------------------------
 st.set_page_config(page_title="Smart Energy Forecasting", layout="wide")
+
 DEFAULT_STYLE = """
 <style>
 [data-testid="stAppViewContainer"] {background-color: #0E1117; color: #F5F5F5;}
@@ -66,11 +65,12 @@ DEFAULT_STYLE = """
 st.markdown(DEFAULT_STYLE, unsafe_allow_html=True)
 
 # -------------------------
-# Sidebar / Navigation
+# Sidebar navigation
 # -------------------------
 st.sidebar.title("🔹 Smart Energy Forecasting")
 menu = st.sidebar.radio("Navigate:", ["🏠 Dashboard", "⚡ Energy Forecast", "💡 Device Management",
                                      "📊 Reports", "⚙️ Settings", "❓ Help & About"])
+
 if "bg_mode" not in st.session_state:
     st.session_state.bg_mode = "Dark"
 
@@ -81,12 +81,6 @@ def normalize_cols(df):
     df = df.copy()
     df.columns = [str(c).strip().lower().replace(" ", "_") for c in df.columns]
     return df
-
-def safe_float(v):
-    try:
-        return float(v)
-    except:
-        return np.nan
 
 def df_to_excel_bytes(dfs: dict):
     out = io.BytesIO()
@@ -99,73 +93,24 @@ def try_get_plot_png(fig):
     if PLOTLY_IMG_OK:
         try:
             return fig.to_image(format="png", width=900, height=540, scale=2)
-        except:
+        except Exception:
             return None
     return None
 
-def make_pdf_bytes(title_text, summary_lines, table_blocks, image_bytes_list=None, logo_bytes=None):
-    if not REPORTLAB_AVAILABLE:
-        return None
-    buf = io.BytesIO()
-    doc = SimpleDocTemplate(buf, pagesize=A4)
-    styles = getSampleStyleSheet()
-    elements = []
-    if logo_bytes:
-        try:
-            logo_buf = io.BytesIO(logo_bytes)
-            img = RLImage(logo_buf, width=80, height=80)
-            elements.append(img)
-        except:
-            pass
-    elements.append(Paragraph(title_text, styles["Title"]))
-    elements.append(Spacer(1, 8))
-    elements.append(Paragraph(f"Generated on {datetime.now().strftime('%d %B %Y %H:%M')}", styles["Normal"]))
-    elements.append(Spacer(1, 12))
-    for line in summary_lines:
-        elements.append(Paragraph(line, styles["Normal"]))
-    elements.append(Spacer(1, 12))
-    if image_bytes_list:
-        for im_bytes in image_bytes_list:
-            try:
-                imgbuf = io.BytesIO(im_bytes)
-                img = RLImage(imgbuf, width=450, height=280)
-                elements.append(img)
-                elements.append(Spacer(1, 8))
-            except:
-                pass
-    for title, df in table_blocks:
-        elements.append(Spacer(1, 8))
-        elements.append(Paragraph(f"<b>{title}</b>", styles["Heading3"]))
-        elements.append(Spacer(1, 6))
-        data = [list(df.columns)] + df.fillna("").astype(str).values.tolist()
-        tbl = Table(data, repeatRows=1)
-        tbl.setStyle(TableStyle([
-            ("BACKGROUND", (0,0), (-1,0), colors.darkblue),
-            ("TEXTCOLOR", (0,0), (-1,0), colors.white),
-            ("GRID", (0,0), (-1,-1), 0.25, colors.grey),
-            ("FONTNAME", (0,0), (-1,0), "Helvetica-Bold"),
-        ]))
-        elements.append(tbl)
-    try:
-        doc.build(elements)
-        return buf.getvalue()
-    except:
-        return None
-
 # -------------------------
-# Dashboard
+# DASHBOARD
 # -------------------------
 if menu == "🏠 Dashboard":
     st.title("🏠 Smart Energy Forecasting")
     st.markdown("""
-    **Welcome** — use the left menu to go to the Energy Forecast module, manage devices, or download reports.
-    - Forecast energy and cost, compare baseline vs adjusted scenarios.
-    - Export formal PDF & Excel reports.
-    """)
+**Welcome** — use the left menu to go to Energy Forecast, manage devices, or download reports.
+- Forecast energy and cost, compare baseline vs adjusted scenarios.
+- Export Excel/PDF reports.
+""")
     st.info("Tip: Use Settings to change background (Dark / Light / Custom image) or set Database credentials.")
 
 # -------------------------
-# Energy Forecast
+# ENERGY FORECAST
 # -------------------------
 elif menu == "⚡ Energy Forecast":
     st.title("⚡ Energy Forecast")
@@ -173,6 +118,7 @@ elif menu == "⚡ Energy Forecast":
     # Step 1: Input
     st.header("Step 1 — Input baseline data")
     input_mode = st.radio("Input method:", ("Upload CSV", "Manual Entry"))
+
     df = None
     if input_mode == "Upload CSV":
         uploaded = st.file_uploader("Upload CSV or Excel (needs 'year' & 'consumption' columns)", type=["csv","xlsx"])
@@ -182,20 +128,17 @@ elif menu == "⚡ Energy Forecast":
             else:
                 df_raw = pd.read_excel(uploaded)
             df_raw = normalize_cols(df_raw)
-            if "year" not in df_raw.columns or not any(c for c in df_raw.columns if "consum" in c or "kwh" in c or "energy" in c):
-                st.error("CSV must contain 'year' and a consumption column.")
+            if "year" not in df_raw.columns or not any(c for c in df_raw.columns if "consum" in c):
+                st.error("CSV must contain 'year' and a consumption column (e.g. 'consumption', 'kwh').")
                 st.stop()
             year_col = "year"
-            cons_col = [c for c in df_raw.columns if any(k in c for k in ["consum","kwh","energy"])][0]
+            cons_col = [c for c in df_raw.columns if "consum" in c][0]
             df = pd.DataFrame({
                 "year": df_raw[year_col].astype(int),
                 "consumption": pd.to_numeric(df_raw[cons_col], errors="coerce")
             })
             cost_cols = [c for c in df_raw.columns if "cost" in c]
-            if cost_cols:
-                df["baseline_cost"] = pd.to_numeric(df_raw[cost_cols[0]], errors="coerce")
-            else:
-                df["baseline_cost"] = np.nan
+            df["baseline_cost"] = pd.to_numeric(df_raw[cost_cols[0]], errors="coerce") if cost_cols else np.nan
     else:
         rows = st.number_input("Number of historical rows:", min_value=1, max_value=20, value=5)
         data = []
@@ -216,14 +159,13 @@ elif menu == "⚡ Energy Forecast":
 
     df["year"] = df["year"].astype(int)
     df["consumption"] = pd.to_numeric(df["consumption"], errors="coerce").fillna(0.0)
-    df["baseline_cost"] = pd.to_numeric(df.get("baseline_cost", np.nan), errors="coerce")
+    df["baseline_cost"] = pd.to_numeric(df.get("baseline_cost", 0), errors="coerce")
     df = df.sort_values("year").reset_index(drop=True)
     st.subheader("Loaded baseline data")
     st.dataframe(df)
 
     # Step 2: Factors
-    st.header("Step 2 — Adjustment factors (additions or reductions)")
-    st.markdown("Enter device-level adjustments. Hours are per YEAR.")
+    st.header("Step 2 — Adjustment factors")
     WATT = {"LED": 10, "CFL": 15, "Fluorescent": 40, "Computer": 150, "Lab Equipment": 500}
     n_factors = st.number_input("How many factor rows to add?", min_value=1, max_value=10, value=1)
     factor_rows = []
@@ -243,8 +185,9 @@ elif menu == "⚡ Energy Forecast":
             watt = WATT[subtype]
             dev_name = f"{subtype} Lamp"
         else:
-            dev_name = device
-            watt = WATT[device]
+            dev_key = device
+            watt = WATT[dev_key]
+            dev_name = dev_key
         kwh_per_year = (watt * int(units) * int(hours)) / 1000.0
         if action == "Reduction":
             kwh_per_year = -abs(kwh_per_year)
@@ -258,23 +201,21 @@ elif menu == "⚡ Energy Forecast":
             "kwh_per_year": kwh_per_year
         })
     df_factors = pd.DataFrame(factor_rows)
-    st.subheader("Factors summary (kWh per year)")
+    st.subheader("Factors summary")
     st.dataframe(df_factors)
 
-    # Site-level adjustment
-    st.markdown("General site-level hours change (positive = add load, negative = reduce load)")
+    # General site-level
+    st.markdown("Site-level adjustment")
     general_hours = st.number_input("General extra/reduced hours per year", min_value=-8760, max_value=8760, value=0)
     general_avg_load_kw = st.number_input("Avg site load for general hours (kW)", min_value=0.0, value=2.0, step=0.1)
     general_kwh = float(general_avg_load_kw) * float(general_hours) if general_hours != 0 else 0.0
     total_net_adjust_kwh = df_factors["kwh_per_year"].sum() + general_kwh
-    if total_net_adjust_kwh > 0:
-        st.info(f"Net adjustment (additional): {total_net_adjust_kwh:,.2f} kWh/year")
-    elif total_net_adjust_kwh < 0:
-        st.info(f"Net adjustment (reduction): {abs(total_net_adjust_kwh):,.2f} kWh/year")
+    if total_net_adjust_kwh != 0:
+        st.info(f"Net adjustment: {total_net_adjust_kwh:,.2f} kWh/year")
     else:
         st.info("Net adjustment: 0 kWh/year")
 
-    # Step 3: Forecast settings
+    # Step 3: Forecast
     st.header("Step 3 — Forecast settings & compute")
     tariff = st.number_input("Electricity tariff (RM per kWh)", min_value=0.0, value=0.52, step=0.01)
     co2_factor = st.number_input("CO₂ factor (kg CO₂ per kWh)", min_value=0.0, value=0.75, step=0.01)
@@ -283,7 +224,6 @@ elif menu == "⚡ Energy Forecast":
     df["baseline_cost"] = df["baseline_cost"].fillna(df["consumption"] * tariff)
     df["baseline_co2_kg"] = df["consumption"] * co2_factor
 
-    # Linear regression
     model = LinearRegression()
     X_hist = df[["year"]].values
     y_hist = df["consumption"].values
@@ -314,33 +254,30 @@ elif menu == "⚡ Energy Forecast":
     forecast_df["saving_cost_rm"] = forecast_df["baseline_cost_rm"] - forecast_df["adjusted_cost_rm"]
     forecast_df["saving_co2_kg"] = forecast_df["baseline_co2_kg"] - forecast_df["adjusted_co2_kg"]
 
-    # -------------------------
-    # Step 4: Graphs and metrics
-    # -------------------------
-    st.header("Step 4 — Visual comparisons & model accuracy")
+    # Step 4: Visualizations (5 graphs)
+    st.header("Step 4 — Visual comparisons")
     col1, col2 = st.columns([2,1])
+
     with col1:
-        st.subheader("1. Baseline (historical)")
-        fig_baseline = px.line(df, x="year", y="consumption", markers=True, title="Baseline kWh")
-        st.plotly_chart(fig_baseline, use_container_width=True)
+        # 1. Baseline kWh historical
+        fig_hist = px.line(df, x="year", y="consumption", markers=True, title="Baseline kWh (historical)")
+        st.plotly_chart(fig_hist, use_container_width=True)
 
-        st.subheader("2. Baseline vs Forecast (kWh)")
-        plot_all = pd.concat([
-            pd.DataFrame({"year": df["year"], "baseline": df["consumption"], "fitted": df["fitted"]}),
-            pd.DataFrame({"year": forecast_df["year"], "baseline": forecast_df["baseline_consumption_kwh"], "fitted": forecast_df["adjusted_consumption_kwh"]})
-        ], ignore_index=True)
-        fig_both = px.line(plot_all.sort_values("year"), x="year", y=["baseline","fitted"], markers=True, title="Baseline vs Forecast (kWh)")
-        st.plotly_chart(fig_both, use_container_width=True)
+        # 2. Baseline vs Forecast kWh
+        fig_kwh = px.line(forecast_df, x="year", y=["baseline_consumption_kwh","adjusted_consumption_kwh"], markers=True,
+                          labels={"value":"kWh","variable":"Series"}, title="Baseline vs Forecast kWh")
+        st.plotly_chart(fig_kwh, use_container_width=True)
 
-        st.subheader("3. Baseline cost (RM)")
-        fig_cost_base = px.bar(df, x="year", y="baseline_cost", title="Baseline Cost (RM)")
-        st.plotly_chart(fig_cost_base, use_container_width=True)
+        # 3. Baseline Cost
+        fig_base_cost = px.bar(forecast_df, x="year", y="baseline_cost_rm", title="Baseline Cost (RM)")
+        st.plotly_chart(fig_base_cost, use_container_width=True)
 
-        st.subheader("4. Baseline vs Forecast cost (RM)")
-        fig_cost = px.bar(forecast_df, x="year", y=["baseline_cost_rm","adjusted_cost_rm"], barmode="group", title="Baseline vs Forecast Cost (RM)")
+        # 4. Baseline vs Forecast Cost
+        fig_cost = px.bar(forecast_df, x="year", y=["baseline_cost_rm","adjusted_cost_rm"], barmode="group",
+                          title="Baseline vs Forecast Cost (RM)")
         st.plotly_chart(fig_cost, use_container_width=True)
 
-        st.subheader("5. CO₂ forecast (kg)")
+        # 5. CO2 forecast
         fig_co2 = px.bar(forecast_df, x="year", y=["baseline_co2_kg","adjusted_co2_kg"], barmode="group", title="CO₂ Forecast (kg)")
         st.plotly_chart(fig_co2, use_container_width=True)
 
@@ -358,4 +295,11 @@ elif menu == "⚡ Energy Forecast":
         total_baseline_kwh = forecast_df["baseline_consumption_kwh"].sum()
         total_adjusted_kwh = forecast_df["adjusted_consumption_kwh"].sum()
         total_kwh_saving = total_baseline_kwh - total_adjusted_kwh
-        total_cost_saving =
+        total_cost_saving = forecast_df["saving_cost_rm"].sum()
+        total_co2_saving = forecast_df["saving_co2_kg"].sum()
+
+        st.metric("Baseline kWh (forecast period)", f"{total_baseline_kwh:,.0f} kWh")
+        st.metric("Adjusted kWh (forecast period)", f"{total_adjusted_kwh:,.0f} kWh")
+        st.metric("Total energy saving (kWh)", f"{total_kwh_saving:,.0f} kWh")
+        st.metric("Total cost saving (RM)", f"RM {total_cost_saving:,.2f}")
+        st.metric("Total CO₂ reduction (kg)", f"{total_co2_saving:,.0f} kg")
