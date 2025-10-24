@@ -1,4 +1,3 @@
-# streamlit_app.py
 """
 Smart Energy Forecasting — Full Streamlit App with optional MySQL saving
 Features included in this single-file app:
@@ -10,6 +9,7 @@ Features included in this single-file app:
 - Graphs, Excel export, optional PDF export (reportlab)
 - Optional MySQL connection: configure in Settings, test connection, Save results to DB
 """
+
 import os
 import io
 import base64
@@ -20,11 +20,10 @@ import pandas as pd
 import numpy as np
 import plotly.express as px
 
-# model & metrics
 from sklearn.linear_model import LinearRegression
 from sklearn.metrics import r2_score
 
-# try to import reportlab for PDF (optional)
+# PDF (optional)
 REPORTLAB_AVAILABLE = False
 try:
     from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image as RLImage
@@ -35,7 +34,7 @@ try:
 except Exception:
     REPORTLAB_AVAILABLE = False
 
-# try to import plotly image backend (kaleido) for embedding charts into PDF
+# Plotly PNG export
 PLOTLY_IMG_OK = False
 try:
     import plotly.io as pio
@@ -44,18 +43,17 @@ try:
 except Exception:
     PLOTLY_IMG_OK = False
 
-# try to import mysql connector
+# MySQL (optional)
 MYSQL_AVAILABLE = True
 try:
     import mysql.connector
-    from mysql.connector import errorcode
 except Exception:
     MYSQL_AVAILABLE = False
 
 EXCEL_ENGINE = "xlsxwriter"
 
 # -------------------------
-# Page config and default theme
+# Page config & theme
 # -------------------------
 st.set_page_config(page_title="Smart Energy Forecasting", layout="wide")
 
@@ -86,12 +84,6 @@ def normalize_cols(df):
     df.columns = [str(c).strip().lower().replace(" ", "_") for c in df.columns]
     return df
 
-def safe_float(v):
-    try:
-        return float(v)
-    except Exception:
-        return np.nan
-
 def df_to_excel_bytes(dfs: dict):
     out = io.BytesIO()
     with pd.ExcelWriter(out, engine=EXCEL_ENGINE) as writer:
@@ -107,7 +99,6 @@ def try_get_plot_png(fig):
             return None
     return None
 
-# PDF builder (optional)
 def make_pdf_bytes(title_text, summary_lines, table_blocks, image_bytes_list=None, logo_bytes=None):
     if not REPORTLAB_AVAILABLE:
         return None
@@ -156,111 +147,6 @@ def make_pdf_bytes(title_text, summary_lines, table_blocks, image_bytes_list=Non
         return buf.getvalue()
     except Exception:
         return None
-
-# -------------------------
-# MySQL helper functions (optional)
-# -------------------------
-def get_db_config():
-    cfg = {}
-    cfg['host'] = st.session_state.get("db_host") or os.environ.get("DB_HOST")
-    cfg['user'] = st.session_state.get("db_user") or os.environ.get("DB_USER")
-    cfg['password'] = st.session_state.get("db_password") or os.environ.get("DB_PASSWORD")
-    cfg['database'] = st.session_state.get("db_database") or os.environ.get("DB_DATABASE")
-    cfg['port'] = int(st.session_state.get("db_port") or os.environ.get("DB_PORT") or 3306)
-    return cfg
-
-def connect_db(timeout=10):
-    cfg = get_db_config()
-    if not MYSQL_AVAILABLE:
-        raise RuntimeError("mysql.connector not installed on this environment.")
-    if not cfg['host'] or not cfg['user'] or not cfg['database']:
-        raise ValueError("Database host/user/database must be set in Settings (or as environment variables).")
-    conn = mysql.connector.connect(
-        host=cfg['host'],
-        user=cfg['user'],
-        password=cfg['password'],
-        database=cfg['database'],
-        port=cfg['port'],
-        connection_timeout=timeout
-    )
-    return conn
-
-def init_db_tables(conn):
-    cursor = conn.cursor()
-    t1 = """
-    CREATE TABLE IF NOT EXISTS energy_data (
-        id INT AUTO_INCREMENT PRIMARY KEY,
-        year INT NOT NULL,
-        consumption DOUBLE,
-        baseline_cost DOUBLE,
-        fitted DOUBLE,
-        adjusted DOUBLE,
-        baseline_cost_rm DOUBLE,
-        adjusted_cost_rm DOUBLE,
-        baseline_co2_kg DOUBLE,
-        adjusted_co2_kg DOUBLE,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    ) ENGINE=InnoDB;
-    """
-    t2 = """
-    CREATE TABLE IF NOT EXISTS energy_factors (
-        id INT AUTO_INCREMENT PRIMARY KEY,
-        device VARCHAR(128),
-        units INT,
-        hours_per_year INT,
-        action VARCHAR(32),
-        kwh_per_year DOUBLE,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    ) ENGINE=InnoDB;
-    """
-    cursor.execute(t1)
-    cursor.execute(t2)
-    conn.commit()
-    cursor.close()
-
-def save_results_to_db(conn, historical_df, factors_df, forecast_df):
-    cursor = conn.cursor()
-    insert_sql = """
-    INSERT INTO energy_data 
-    (year, consumption, baseline_cost, fitted, adjusted, baseline_cost_rm, adjusted_cost_rm, baseline_co2_kg, adjusted_co2_kg)
-    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
-    """
-    for _, row in historical_df.iterrows():
-        fitted = row.get("fitted", None)
-        adjusted = row.get("adjusted", None)
-        baseline_cost_rm = row.get("baseline_cost", None)
-        adjusted_cost_rm = row.get("adjusted_cost", None)
-        baseline_co2_kg = row.get("baseline_co2_kg", None)
-        adjusted_co2_kg = row.get("adjusted_co2_kg", None)
-        cursor.execute(insert_sql, (
-            int(row['year']), float(row['consumption']), 
-            float(baseline_cost_rm) if baseline_cost_rm is not None else None,
-            float(fitted) if pd.notna(fitted) else None,
-            float(adjusted) if pd.notna(adjusted) else None,
-            float(baseline_cost_rm) if baseline_cost_rm is not None else None,
-            float(adjusted_cost_rm) if adjusted_cost_rm is not None else None,
-            float(baseline_co2_kg) if baseline_co2_kg is not None else None,
-            float(adjusted_co2_kg) if adjusted_co2_kg is not None else None
-        ))
-    for _, row in forecast_df.iterrows():
-        cursor.execute(insert_sql, (
-            int(row['year']), float(row['baseline_consumption_kwh']),
-            float(row.get('baseline_cost_rm', None)) if not pd.isna(row.get('baseline_cost_rm', None)) else None,
-            float(row.get('baseline_consumption_kwh', None)) if not pd.isna(row.get('baseline_consumption_kwh', None)) else None,
-            float(row.get('adjusted_consumption_kwh', None)) if not pd.isna(row.get('adjusted_consumption_kwh', None)) else None,
-            float(row.get('baseline_cost_rm', None)) if not pd.isna(row.get('baseline_cost_rm', None)) else None,
-            float(row.get('adjusted_cost_rm', None)) if not pd.isna(row.get('adjusted_cost_rm', None)) else None,
-            float(row.get('baseline_co2_kg', None)) if not pd.isna(row.get('baseline_co2_kg', None)) else None,
-            float(row.get('adjusted_co2_kg', None)) if not pd.isna(row.get('adjusted_co2_kg', None)) else None
-        ))
-    insert_f = """
-    INSERT INTO energy_factors (device, units, hours_per_year, action, kwh_per_year)
-    VALUES (%s,%s,%s,%s,%s)
-    """
-    for _, r in factors_df.iterrows():
-        cursor.execute(insert_f, (str(r['device']), int(r['units']), int(r['hours_per_year']), str(r['action']), float(r['kwh_per_year'])))
-    conn.commit()
-    cursor.close()
 
 # -------------------------
 # DASHBOARD
@@ -388,6 +274,88 @@ elif menu == "⚡ Energy Forecast":
     else:
         st.info("Net adjustment: 0 kWh/year")
 
-    # Step 3: Forecast settings
+    # -------------------------
+    # Step 3: Forecast & Step 4: Visuals (5 graphs)
+    # -------------------------
     st.header("Step 3 — Forecast settings & compute")
-    tariff = st.number_input("Electricity tariff (RM per kWh)", min_value
+    tariff = st.number_input("Electricity tariff (RM per kWh)", min_value=0.0, value=0.52, step=0.01)
+    co2_factor = st.number_input("CO₂ factor (kg CO₂ per kWh)", min_value=0.0, value=0.75, step=0.01)
+    n_years_forecast = st.number_input("Forecast years ahead", min_value=1, max_value=10, value=3, step=1)
+
+    # Fill missing baseline cost & CO2
+    df["baseline_cost"] = df["baseline_cost"].fillna(df["consumption"] * tariff)
+    df["baseline_co2_kg"] = df["consumption"] * co2_factor
+
+    # Linear regression
+    model = LinearRegression()
+    X_hist = df[["year"]].values
+    y_hist = df["consumption"].values
+    if len(X_hist) >= 2:
+        model.fit(X_hist, y_hist)
+        df["fitted"] = model.predict(X_hist)
+        r2 = r2_score(y_hist, df["fitted"])
+    else:
+        df["fitted"] = df["consumption"]
+        r2 = 1.0
+
+    last_year = int(df["year"].max())
+    future_years = [last_year + i for i in range(1, int(n_years_forecast)+1)]
+    future_X = np.array(future_years).reshape(-1,1)
+    future_baseline_forecast = model.predict(future_X) if len(X_hist) >= 2 else np.array([df["consumption"].iloc[-1]]*len(future_years))
+    adjusted_forecast = future_baseline_forecast + total_net_adjust_kwh
+
+    forecast_df = pd.DataFrame({
+        "year": future_years,
+        "baseline_consumption_kwh": future_baseline_forecast,
+        "adjusted_consumption_kwh": adjusted_forecast
+    })
+    forecast_df["baseline_cost_rm"] = forecast_df["baseline_consumption_kwh"] * tariff
+    forecast_df["adjusted_cost_rm"] = forecast_df["adjusted_consumption_kwh"] * tariff
+    forecast_df["baseline_co2_kg"] = forecast_df["baseline_consumption_kwh"] * co2_factor
+    forecast_df["adjusted_co2_kg"] = forecast_df["adjusted_consumption_kwh"] * co2_factor
+    forecast_df["saving_kwh"] = forecast_df["baseline_consumption_kwh"] - forecast_df["adjusted_consumption_kwh"]
+    forecast_df["saving_cost_rm"] = forecast_df["baseline_cost_rm"] - forecast_df["adjusted_cost_rm"]
+    forecast_df["saving_co2_kg"] = forecast_df["baseline_co2_kg"] - forecast_df["adjusted_co2_kg"]
+
+    # Step 4: Visualizations
+    st.header("Step 4 — Visual comparisons & model accuracy")
+    col1, col2 = st.columns([2,1])
+    with col1:
+        fig1 = px.line(forecast_df, x="year", y="baseline_consumption_kwh", markers=True,
+                       title="Baseline kWh Forecast", labels={"baseline_consumption_kwh":"kWh"})
+        st.plotly_chart(fig1, use_container_width=True)
+
+        fig2 = px.line(forecast_df, x="year", y=["baseline_consumption_kwh","adjusted_consumption_kwh"],
+                       markers=True, title="Baseline vs Forecast kWh", labels={"value":"kWh","variable":"Series"})
+        st.plotly_chart(fig2, use_container_width=True)
+
+        fig3 = px.bar(forecast_df, x="year", y="baseline_cost_rm", title="Baseline Cost (RM)", labels={"baseline_cost_rm":"RM"})
+        st.plotly_chart(fig3, use_container_width=True)
+
+        fig4 = px.bar(forecast_df, x="year", y=["baseline_cost_rm","adjusted_cost_rm"], barmode="group",
+                      title="Baseline vs Forecast Cost (RM)")
+        st.plotly_chart(fig4, use_container_width=True)
+
+        fig5 = px.bar(forecast_df, x="year", y="adjusted_co2_kg", title="CO₂ Forecast (kg)", labels={"adjusted_co2_kg":"kg"})
+        st.plotly_chart(fig5, use_container_width=True)
+
+    with col2:
+        st.subheader("Model performance")
+        st.markdown(f"**R²:** `{r2:.4f}`")
+        if r2 >= 0.8:
+            st.success("Model accuracy: High")
+        elif r2 >= 0.6:
+            st.warning("Model accuracy: Moderate")
+        else:
+            st.error("Model accuracy: Low — consider more history or features")
+
+        st.markdown("**Totals over forecast period**")
+        total_baseline_kwh = forecast_df["baseline_consumption_kwh"].sum()
+        total_adjusted_kwh = forecast_df["adjusted_consumption_kwh"].sum()
+        total_kwh_saving = total_baseline_kwh - total_adjusted_kwh
+        total_cost_saving = forecast_df["saving_cost_rm"].sum()
+        total_co2_saving = forecast_df["saving_co2_kg"].sum()
+
+        st.metric("Baseline kWh (forecast period)", f"{total_baseline_kwh:,.0f} kWh")
+        st.metric("Adjusted kWh (forecast period)", f"{total_adjusted_kwh:,.0f} kWh")
+        st.metric("Total energy saving (kWh)",
