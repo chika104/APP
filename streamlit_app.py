@@ -1,3 +1,4 @@
+# streamlit_app.py
 """
 Smart Energy Forecasting — Full Streamlit App (Railway-ready)
 - Default Railway DB proxy host/port/user/database set (replace password in Settings or env var RAILWAY_DB_PASSWORD)
@@ -64,7 +65,7 @@ if "db_port" not in st.session_state:
 if "db_user" not in st.session_state:
     st.session_state.db_user = "root"
 if "db_password" not in st.session_state:
-    st.session_state.db_password = "polrwgDJZnGLaungxPtGkOTaduCuolEj"
+    st.session_state.db_password = "<YOUR_RAILWAY_PASSWORD>"
 if "db_database" not in st.session_state:
     st.session_state.db_database = "railway"
 
@@ -279,6 +280,7 @@ def apply_theme():
     elif st.session_state.bg_mode == "Light":
         st.markdown(LIGHT_STYLE, unsafe_allow_html=True)
     elif st.session_state.bg_mode == "Custom" and st.session_state.bg_image_url:
+        # custom image
         custom_style = f"""
         <style>
         [data-testid="stAppViewContainer"] {{
@@ -291,9 +293,7 @@ def apply_theme():
         st.markdown(custom_style, unsafe_allow_html=True)
 apply_theme()
 
-# -------------------------
 # Sidebar and navigation
-# -------------------------
 st.sidebar.title("🔹 Smart Energy Forecasting")
 menu = st.sidebar.radio("Navigate:", ["🏠 Dashboard", "⚡ Energy Forecast", "💡 Device Management",
                                      "📊 Reports", "⚙️ Settings", "❓ Help & About"])
@@ -321,10 +321,7 @@ elif menu == "⚡ Energy Forecast":
     input_mode = st.radio("Input method:", ("Upload CSV", "Manual Entry"))
 
     if input_mode == "Upload CSV":
-        uploaded = st.file_uploader(
-            "Upload CSV or Excel (needs 'year', 'consumption' and optional 'CO2' column)",
-            type=["csv", "xlsx"]
-        )
+        uploaded = st.file_uploader("Upload CSV or Excel (needs 'year' & a consumption column)", type=["csv", "xlsx"])
         if uploaded:
             try:
                 if str(uploaded.name).lower().endswith(".csv"):
@@ -334,41 +331,32 @@ elif menu == "⚡ Energy Forecast":
             except Exception as e:
                 st.error(f"Error reading file: {e}")
                 st.stop()
-
             df_raw = normalize_cols(df_raw)
-
-            # cari kolom
+            # find columns
             year_candidates = [c for c in df_raw.columns if "year" in c]
             cons_candidates = [c for c in df_raw.columns if any(k in c for k in ["consum", "kwh", "energy"])]
-            co2_candidates = [c for c in df_raw.columns if "co2" in c]
-
             if not year_candidates or not cons_candidates:
                 st.error("CSV must contain 'year' and a consumption column (e.g. 'consumption' or 'kwh').")
                 st.stop()
-
             year_col = year_candidates[0]
             cons_col = cons_candidates[0]
-            co2_col = co2_candidates[0] if co2_candidates else None
-
-            # Coerce numeric & drop invalid
+            # coerce to numeric and drop invalid
             df_raw[year_col] = pd.to_numeric(df_raw[year_col], errors="coerce")
             df_raw[cons_col] = pd.to_numeric(df_raw[cons_col], errors="coerce")
-            if co2_col:
-                df_raw[co2_col] = pd.to_numeric(df_raw[co2_col], errors="coerce")
-
             before = len(df_raw)
             df_raw = df_raw.dropna(subset=[year_col, cons_col])
             after = len(df_raw)
             if after < before:
                 st.warning(f"{before - after} rows removed due to invalid year/consumption.")
-
-            # Build loaded df
             df_loaded = pd.DataFrame({
                 "year": df_raw[year_col].astype(int),
-                "consumption": df_raw[cons_col],
-                "baseline_cost": np.nan,
-                "baseline_co2_kg": df_raw[co2_col] if co2_col else np.nan
+                "consumption": df_raw[cons_col]
             })
+            cost_cols = [c for c in df_raw.columns if "cost" in c]
+            if cost_cols:
+                df_loaded["baseline_cost"] = pd.to_numeric(df_raw[cost_cols[0]], errors="coerce")
+            else:
+                df_loaded["baseline_cost"] = np.nan
             st.session_state.df = df_loaded.sort_values("year").reset_index(drop=True)
 
     else:
@@ -394,8 +382,6 @@ elif menu == "⚡ Energy Forecast":
     df = st.session_state.df.copy()
     st.subheader("Loaded baseline data")
     st.dataframe(df)
-
-# ... lanjutkan sisanya sama seperti kode lama ...
 
     # Step 2: Factors
     st.header("Step 2 — Adjustment factors")
@@ -724,4 +710,3 @@ elif menu == "❓ Help & About":
     """)
 
 # End of file
-
