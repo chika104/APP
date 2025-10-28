@@ -1,14 +1,12 @@
 # streamlit_app.py
 """
-Smart Energy Forecasting — Full Streamlit App with optional MySQL saving
+Smart Energy Forecasting — Full Streamlit App (complete)
 Features:
-- Theme selector (Dark/Light/Custom image)
-- Menu navigation: Dashboard, Energy Forecast, Device Management, Reports, Settings, Help & About
-- Input: Upload CSV or Manual entry
-- Adjustment factors, forecast (LinearRegression)
-- Model accuracy (R^2)
-- 5 Graphs (Baseline kWh, Baseline vs Forecast kWh, Baseline Cost, Cost vs Forecast, CO₂ forecast)
-- Excel export, optional PDF export (reportlab + kaleido), optional MySQL save
+- Preset Railway DB host/port/user/database (enter password in Settings or set env var RAILWAY_DB_PASSWORD)
+- Session-state persistence for df, df_factors, forecast_df, theme and report history
+- 5 graphs (Baseline kWh, Baseline vs Forecast kWh, Baseline Cost, Cost vs Forecast, CO₂ forecast)
+- Excel export, PDF export (optional, requires reportlab + kaleido), Save to MySQL (Railway)
+- PDF history saved to Reports menu with download
 """
 import os
 import io
@@ -22,7 +20,7 @@ import plotly.express as px
 from sklearn.linear_model import LinearRegression
 from sklearn.metrics import r2_score
 
-# Optional PDF (reportlab)
+# Optional PDF support
 REPORTLAB_AVAILABLE = False
 try:
     from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image as RLImage
@@ -33,7 +31,7 @@ try:
 except Exception:
     REPORTLAB_AVAILABLE = False
 
-# Plotly -> PNG (kaleido)
+# Plotly->PNG support (kaleido)
 PLOTLY_IMG_OK = False
 try:
     import plotly.io as pio
@@ -42,7 +40,7 @@ try:
 except Exception:
     PLOTLY_IMG_OK = False
 
-# Optional MySQL
+# MySQL connector (optional)
 MYSQL_AVAILABLE = True
 try:
     import mysql.connector
@@ -53,21 +51,37 @@ except Exception:
 EXCEL_ENGINE = "xlsxwriter"
 
 # -------------------------
-# Page config & default theme
+# Session defaults (persistence across menu changes)
 # -------------------------
-st.set_page_config(page_title="Smart Energy Forecasting", layout="wide")
+if "bg_mode" not in st.session_state:
+    st.session_state.bg_mode = "Dark"  # default dark until user changes
 
-DEFAULT_STYLE = """
-<style>
-[data-testid="stAppViewContainer"] {background-color: #0E1117; color: #F5F5F5;}
-[data-testid="stHeader"] {background: rgba(0,0,0,0);}
-[data-testid="stSidebar"] {background-color: rgba(255,255,255,0.04);}
-</style>
-"""
-st.markdown(DEFAULT_STYLE, unsafe_allow_html=True)
+# default Railway DB config (user must add DB password in Settings or set env var)
+if "db_host" not in st.session_state:
+    st.session_state.db_host = "switchback.proxy.rlwy.net"
+if "db_port" not in st.session_state:
+    st.session_state.db_port = 55398
+if "db_user" not in st.session_state:
+    st.session_state.db_user = "root"
+if "db_password" not in st.session_state:
+    # try environment variable first, otherwise leave blank for user to fill in Settings
+    st.session_state.db_password = os.environ.get("RAILWAY_DB_PASSWORD", "")
+if "db_database" not in st.session_state:
+    st.session_state.db_database = "railway"
+
+# data persistence
+if "df" not in st.session_state:
+    st.session_state.df = pd.DataFrame()
+if "df_factors" not in st.session_state:
+    st.session_state.df_factors = pd.DataFrame()
+if "forecast_df" not in st.session_state:
+    st.session_state.forecast_df = pd.DataFrame()
+if "report_history" not in st.session_state:
+    # each entry: {"filename": ..., "bytes": ..., "generated_at": ...}
+    st.session_state.report_history = []
 
 # -------------------------
-# Helper / Utility functions
+# Utility functions
 # -------------------------
 def normalize_cols(df):
     df = df.copy()
@@ -90,6 +104,9 @@ def try_get_plot_png(fig):
     return None
 
 def make_pdf_bytes(title_text, summary_lines, table_blocks, image_bytes_list=None, logo_bytes=None):
+    """
+    Create a simple PDF using reportlab. Requires reportlab to be installed.
+    """
     if not REPORTLAB_AVAILABLE:
         return None
     buf = io.BytesIO()
@@ -129,7 +146,6 @@ def make_pdf_bytes(title_text, summary_lines, table_blocks, image_bytes_list=Non
             ("BACKGROUND", (0,0), (-1,0), colors.darkblue),
             ("TEXTCOLOR", (0,0), (-1,0), colors.white),
             ("GRID", (0,0), (-1,-1), 0.25, colors.grey),
-            ("FONTNAME", (0,0), (-1,0), "Helvetica-Bold"),
         ]))
         elements.append(tbl)
     try:
@@ -139,13 +155,13 @@ def make_pdf_bytes(title_text, summary_lines, table_blocks, image_bytes_list=Non
         return None
 
 # -------------------------
-# MySQL helper functions (optional)
+# DB helpers (use session_state defaults)
 # -------------------------
 def get_db_config():
     cfg = {}
     cfg['host'] = st.session_state.get("db_host") or os.environ.get("DB_HOST")
     cfg['user'] = st.session_state.get("db_user") or os.environ.get("DB_USER")
-    cfg['password'] = st.session_state.get("db_password") or os.environ.get("DB_PASSWORD")
+    cfg['password'] = st.session_state.get("db_password") or os.environ.get("DB_PASSWORD") or os.environ.get("RAILWAY_DB_PASSWORD")
     cfg['database'] = st.session_state.get("db_database") or os.environ.get("DB_DATABASE")
     cfg['port'] = int(st.session_state.get("db_port") or os.environ.get("DB_PORT") or 3306)
     return cfg
@@ -206,26 +222,24 @@ def save_results_to_db(conn, historical_df, factors_df, forecast_df):
     (year, consumption, baseline_cost, fitted, adjusted, baseline_cost_rm, adjusted_cost_rm, baseline_co2_kg, adjusted_co2_kg)
     VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
     """
+    # historical
     for _, row in historical_df.iterrows():
-        fitted = row.get("fitted", None)
-        adjusted = row.get("adjusted", None)
-        baseline_cost_rm = row.get("baseline_cost", None)
-        adjusted_cost_rm = row.get("adjusted_cost", None)
-        baseline_co2_kg = row.get("baseline_co2_kg", None)
-        adjusted_co2_kg = row.get("adjusted_co2_kg", None)
         cursor.execute(insert_sql, (
-            int(row['year']), float(row['consumption']), 
-            float(baseline_cost_rm) if baseline_cost_rm is not None else None,
-            float(fitted) if pd.notna(fitted) else None,
-            float(adjusted) if pd.notna(adjusted) else None,
-            float(baseline_cost_rm) if baseline_cost_rm is not None else None,
-            float(adjusted_cost_rm) if adjusted_cost_rm is not None else None,
-            float(baseline_co2_kg) if baseline_co2_kg is not None else None,
-            float(adjusted_co2_kg) if adjusted_co2_kg is not None else None
+            int(row['year']),
+            float(row['consumption']) if not pd.isna(row['consumption']) else None,
+            float(row.get('baseline_cost', None)) if not pd.isna(row.get('baseline_cost', None)) else None,
+            float(row.get('fitted', None)) if not pd.isna(row.get('fitted', None)) else None,
+            float(row.get('adjusted', None)) if not pd.isna(row.get('adjusted', None)) else None,
+            float(row.get('baseline_cost', None)) if not pd.isna(row.get('baseline_cost', None)) else None,
+            float(row.get('adjusted_cost', None)) if not pd.isna(row.get('adjusted_cost', None)) else None,
+            float(row.get('baseline_co2_kg', None)) if not pd.isna(row.get('baseline_co2_kg', None)) else None,
+            float(row.get('adjusted_co2_kg', None)) if not pd.isna(row.get('adjusted_co2_kg', None)) else None
         ))
+    # forecast rows
     for _, row in forecast_df.iterrows():
         cursor.execute(insert_sql, (
-            int(row['year']), float(row['baseline_consumption_kwh']),
+            int(row['year']),
+            float(row.get('baseline_consumption_kwh', None)) if not pd.isna(row.get('baseline_consumption_kwh', None)) else None,
             float(row.get('baseline_cost_rm', None)) if not pd.isna(row.get('baseline_cost_rm', None)) else None,
             float(row.get('baseline_consumption_kwh', None)) if not pd.isna(row.get('baseline_consumption_kwh', None)) else None,
             float(row.get('adjusted_consumption_kwh', None)) if not pd.isna(row.get('adjusted_consumption_kwh', None)) else None,
@@ -234,6 +248,7 @@ def save_results_to_db(conn, historical_df, factors_df, forecast_df):
             float(row.get('baseline_co2_kg', None)) if not pd.isna(row.get('baseline_co2_kg', None)) else None,
             float(row.get('adjusted_co2_kg', None)) if not pd.isna(row.get('adjusted_co2_kg', None)) else None
         ))
+    # factors
     insert_f = """
     INSERT INTO energy_factors (device, units, hours_per_year, action, kwh_per_year)
     VALUES (%s,%s,%s,%s,%s)
@@ -244,14 +259,34 @@ def save_results_to_db(conn, historical_df, factors_df, forecast_df):
     cursor.close()
 
 # -------------------------
-# Sidebar / Navigation
+# Page config & sidebar
 # -------------------------
+st.set_page_config(page_title="Smart Energy Forecasting", layout="wide")
+
+DEFAULT_STYLE = """
+<style>
+[data-testid="stAppViewContainer"] {background-color: #0E1117; color: #F5F5F5;}
+[data-testid="stHeader"] {background: rgba(0,0,0,0);}
+[data-testid="stSidebar"] {background-color: rgba(255,255,255,0.04);}
+</style>
+"""
+
+# apply theme from session (default dark)
+if st.session_state.bg_mode == "Dark":
+    st.markdown(DEFAULT_STYLE, unsafe_allow_html=True)
+else:
+    # simple light theme
+    LIGHT_STYLE = """
+    <style>
+    [data-testid="stAppViewContainer"] {background-color: #FFFFFF; color: #000000;}
+    [data-testid="stSidebar"] {background-color: rgba(0,0,0,0.03);}
+    </style>
+    """
+    st.markdown(LIGHT_STYLE, unsafe_allow_html=True)
+
 st.sidebar.title("🔹 Smart Energy Forecasting")
 menu = st.sidebar.radio("Navigate:", ["🏠 Dashboard", "⚡ Energy Forecast", "💡 Device Management",
                                      "📊 Reports", "⚙️ Settings", "❓ Help & About"])
-
-if "bg_mode" not in st.session_state:
-    st.session_state.bg_mode = "Dark"
 
 # -------------------------
 # DASHBOARD
@@ -271,77 +306,97 @@ if menu == "🏠 Dashboard":
 elif menu == "⚡ Energy Forecast":
     st.title("⚡ Energy Forecast")
 
-    # Step 1: Input baseline data
+    # Step 1: Input baseline data (CSV or manual)
     st.header("Step 1 — Input baseline data")
     input_mode = st.radio("Input method:", ("Upload CSV", "Manual Entry"))
 
-    df = None
     if input_mode == "Upload CSV":
-        uploaded = st.file_uploader("Upload CSV or Excel (needs 'year' & 'consumption' columns)", type=["csv","xlsx"])
-        if uploaded:
+        uploaded = st.file_uploader("Upload CSV or Excel (needs 'year' & a consumption column)", type=["csv", "xlsx"])
+        if uploaded is not None:
             if str(uploaded.name).lower().endswith(".csv"):
                 df_raw = pd.read_csv(uploaded)
             else:
                 df_raw = pd.read_excel(uploaded)
             df_raw = normalize_cols(df_raw)
-            if "year" not in df_raw.columns or not any(c for c in df_raw.columns if "consum" in c or "kwh" in c or "energy" in c):
-                st.error("CSV must contain 'year' and a consumption column (e.g. 'consumption', 'kwh').")
+            # find year and consumption columns (robust)
+            year_candidates = [c for c in df_raw.columns if "year" in c]
+            cons_candidates = [c for c in df_raw.columns if any(k in c for k in ["consum", "kwh", "energy"])]
+            if not year_candidates or not cons_candidates:
+                st.error("CSV must contain 'year' column and a consumption column (e.g. 'consumption' or 'kwh').")
                 st.stop()
-            year_col = "year"
-            cons_col = [c for c in df_raw.columns if any(k in c for k in ["consum","kwh","energy"])][0]
-            df = pd.DataFrame({
+            year_col = year_candidates[0]
+            cons_col = cons_candidates[0]
+            # safe conversion: coerce non-numeric to NaN, drop those rows
+            df_raw[year_col] = pd.to_numeric(df_raw[year_col], errors="coerce")
+            df_raw[cons_col] = pd.to_numeric(df_raw[cons_col], errors="coerce")
+            before = len(df_raw)
+            df_raw = df_raw.dropna(subset=[year_col, cons_col])
+            after = len(df_raw)
+            if after < before:
+                st.warning(f"{before - after} rows removed due to invalid year/consumption values.")
+            df_loaded = pd.DataFrame({
                 "year": df_raw[year_col].astype(int),
-                "consumption": pd.to_numeric(df_raw[cons_col], errors="coerce")
+                "consumption": df_raw[cons_col]
             })
+            # optional baseline cost
             cost_cols = [c for c in df_raw.columns if "cost" in c]
             if cost_cols:
-                df["baseline_cost"] = pd.to_numeric(df_raw[cost_cols[0]], errors="coerce")
+                df_loaded["baseline_cost"] = pd.to_numeric(df_raw[cost_cols[0]], errors="coerce")
             else:
-                df["baseline_cost"] = np.nan
+                df_loaded["baseline_cost"] = np.nan
+            st.session_state.df = df_loaded.sort_values("year").reset_index(drop=True)
     else:
-        rows = st.number_input("Number of historical rows:", min_value=1, max_value=20, value=5)
-        data = []
-        for i in range(int(rows)):
-            c1,c2,c3 = st.columns([1,1,1])
-            with c1:
-                y = st.number_input(f"Year {i+1}", 2000, 2100, 2020+i, key=f"year_{i}")
-            with c2:
-                cons = st.number_input(f"Consumption kWh ({y})", 0.0, 10_000_000.0, 10000.0, key=f"cons_{i}")
-            with c3:
-                cost = st.number_input(f"Baseline cost RM ({y}) (optional)", 0.0, 10_000_000.0, 0.0, key=f"cost_{i}")
-            data.append({"year": int(y), "consumption": float(cons), "baseline_cost": float(cost) if cost>0 else np.nan})
-        df = pd.DataFrame(data)
+        # manual entry
+        if st.session_state.df is None or st.session_state.df.empty:
+            rows = st.number_input("Number of historical rows:", min_value=1, max_value=20, value=5)
+            data = []
+            for i in range(int(rows)):
+                c1, c2, c3 = st.columns([1, 1, 1])
+                with c1:
+                    y = st.number_input(f"Year {i+1}", 2000, 2100, 2020 + i, key=f"year_{i}")
+                with c2:
+                    cons = st.number_input(f"Consumption kWh ({y})", 0.0, 10_000_000.0, 10000.0, key=f"cons_{i}")
+                with c3:
+                    cost = st.number_input(f"Baseline cost RM ({y}) (optional)", 0.0, 10_000_000.0, 0.0, key=f"cost_{i}")
+                data.append({"year": int(y), "consumption": float(cons), "baseline_cost": float(cost) if cost > 0 else np.nan})
+            st.session_state.df = pd.DataFrame(data).sort_values("year").reset_index(drop=True)
 
-    if df is None or df.empty:
-        st.warning("Please upload or enter data to continue.")
+    # show loaded historical
+    if st.session_state.df is None or st.session_state.df.empty:
+        st.warning("No historical data available yet.")
         st.stop()
-
-    df["year"] = df["year"].astype(int)
-    df["consumption"] = pd.to_numeric(df["consumption"], errors="coerce").fillna(0.0)
-    if "baseline_cost" not in df.columns:
-        df["baseline_cost"] = np.nan
-    df["baseline_cost"] = pd.to_numeric(df["baseline_cost"], errors="coerce")
-    df = df.sort_values("year").reset_index(drop=True)
+    df = st.session_state.df.copy()
     st.subheader("Loaded baseline data")
     st.dataframe(df)
 
-    # Step 2: Factors
+    # Step 2: Factors (persist to session_state)
     st.header("Step 2 — Adjustment factors (additions or reductions)")
     st.markdown("Enter device-level adjustments. Hours are per YEAR.")
     WATT = {"LED": 10, "CFL": 15, "Fluorescent": 40, "Computer": 150, "Lab Equipment": 500}
-    n_factors = st.number_input("How many factor rows to add?", min_value=1, max_value=10, value=1)
-    factor_rows = []
+
+    # if session factors empty, create 1 default row
+    if "df_factors" not in st.session_state or st.session_state.df_factors is None or st.session_state.df_factors.empty:
+        default_factors = [{"device": "LED Lamp", "units": 0, "hours_per_year": 0, "action": "Addition", "kwh_per_year": 0.0}]
+        st.session_state.df_factors = pd.DataFrame(default_factors)
+
+    n_factors = st.number_input("How many factor rows to show/edit?", min_value=1, max_value=10, value=max(1, len(st.session_state.df_factors)), key="n_factors")
+    factors_edit = []
     for i in range(int(n_factors)):
         st.markdown(f"**Factor {i+1}**")
-        c1,c2,c3,c4 = st.columns([2,1,1,1])
+        c1, c2, c3, c4 = st.columns([2, 1, 1, 1])
         with c1:
-            device = st.selectbox(f"Device type (factor {i+1})", options=["Lamp - LED","Lamp - CFL","Lamp - Fluorescent","Computer","Lab Equipment"], key=f"dev_{i}")
+            dev_options = ["Lamp - LED", "Lamp - CFL", "Lamp - Fluorescent", "Computer", "Lab Equipment"]
+            prev_dev = st.session_state.df_factors["device"].iloc[i] if i < len(st.session_state.df_factors) else "LED Lamp"
+            device = st.selectbox(f"Device type (factor {i+1})", options=dev_options, index=0 if prev_dev not in dev_options else dev_options.index(prev_dev.replace(" Lamp","")), key=f"dev_{i}")
         with c2:
-            units = st.number_input(f"Units", min_value=0, value=0, step=1, key=f"units_{i}")
+            prev_units = int(st.session_state.df_factors["units"].iloc[i]) if i < len(st.session_state.df_factors) else 0
+            units = st.number_input(f"Units", min_value=0, value=prev_units, step=1, key=f"units_{i}")
         with c3:
-            hours = st.number_input(f"Hours per YEAR", min_value=0, max_value=8760, value=0, step=1, key=f"hours_{i}")
+            prev_hours = int(st.session_state.df_factors["hours_per_year"].iloc[i]) if i < len(st.session_state.df_factors) else 0
+            hours = st.number_input(f"Hours per YEAR", min_value=0, max_value=8760, value=prev_hours, step=1, key=f"hours_{i}")
         with c4:
-            action = st.selectbox(f"Action", options=["Addition","Reduction"], key=f"action_{i}")
+            prev_action = st.session_state.df_factors["action"].iloc[i] if i < len(st.session_state.df_factors) else "Addition"
+            action = st.selectbox(f"Action", options=["Addition", "Reduction"], index=0 if prev_action == "Addition" else 1, key=f"action_{i}")
         if device.startswith("Lamp"):
             subtype = device.split(" - ")[1]
             watt = WATT[subtype]
@@ -355,21 +410,16 @@ elif menu == "⚡ Energy Forecast":
             kwh_per_year = -abs(kwh_per_year)
         else:
             kwh_per_year = abs(kwh_per_year)
-        factor_rows.append({
-            "device": dev_name,
-            "units": int(units),
-            "hours_per_year": int(hours),
-            "action": action,
-            "kwh_per_year": kwh_per_year
-        })
-    df_factors = pd.DataFrame(factor_rows)
+        factors_edit.append({"device": dev_name, "units": int(units), "hours_per_year": int(hours), "action": action, "kwh_per_year": kwh_per_year})
+    st.session_state.df_factors = pd.DataFrame(factors_edit)
+    df_factors = st.session_state.df_factors.copy()
     st.subheader("Factors summary (kWh per year)")
     st.dataframe(df_factors)
 
     # site-level change
     st.markdown("General site-level hours change (positive = add load, negative = reduce load)")
-    general_hours = st.number_input("General extra/reduced hours per year", min_value=-8760, max_value=8760, value=0)
-    general_avg_load_kw = st.number_input("Avg site load for general hours (kW)", min_value=0.0, value=2.0, step=0.1)
+    general_hours = st.number_input("General extra/reduced hours per year", min_value=-8760, max_value=8760, value=0, key="general_hours")
+    general_avg_load_kw = st.number_input("Avg site load for general hours (kW)", min_value=0.0, value=2.0, step=0.1, key="general_avg_load_kw")
     general_kwh = float(general_avg_load_kw) * float(general_hours) if general_hours != 0 else 0.0
     total_net_adjust_kwh = df_factors["kwh_per_year"].sum() + general_kwh
     if total_net_adjust_kwh > 0:
@@ -381,14 +431,16 @@ elif menu == "⚡ Energy Forecast":
 
     # Step 3: Forecast settings & compute
     st.header("Step 3 — Forecast settings & compute")
-    tariff = st.number_input("Electricity tariff (RM per kWh)", min_value=0.0, value=0.52, step=0.01)
-    co2_factor = st.number_input("CO₂ factor (kg CO₂ per kWh)", min_value=0.0, value=0.75, step=0.01)
-    n_years_forecast = st.number_input("Forecast years ahead", min_value=1, max_value=10, value=3, step=1)
+    tariff = st.number_input("Electricity tariff (RM per kWh)", min_value=0.0, value=0.52, step=0.01, key="tariff")
+    co2_factor = st.number_input("CO₂ factor (kg CO₂ per kWh)", min_value=0.0, value=0.75, step=0.01, key="co2_factor")
+    n_years_forecast = st.number_input("Forecast years ahead", min_value=1, max_value=10, value=3, step=1, key="n_years_forecast")
 
+    # ensure baseline_cost and baseline_co2 exist for historical
+    df["baseline_cost"] = df.get("baseline_cost", np.nan)
     df["baseline_cost"] = df["baseline_cost"].fillna(df["consumption"] * tariff)
     df["baseline_co2_kg"] = df["consumption"] * co2_factor
 
-    # Linear regression
+    # linear regression model
     model = LinearRegression()
     X_hist = df[["year"]].values
     y_hist = df["consumption"].values
@@ -401,9 +453,9 @@ elif menu == "⚡ Energy Forecast":
         r2 = 1.0
 
     last_year = int(df["year"].max())
-    future_years = [last_year + i for i in range(1, int(n_years_forecast)+1)]
-    future_X = np.array(future_years).reshape(-1,1)
-    future_baseline_forecast = model.predict(future_X) if len(X_hist) >= 2 else np.array([df["consumption"].iloc[-1]]*len(future_years))
+    future_years = [last_year + i for i in range(1, int(n_years_forecast) + 1)]
+    future_X = np.array(future_years).reshape(-1, 1)
+    future_baseline_forecast = model.predict(future_X) if len(X_hist) >= 2 else np.array([df["consumption"].iloc[-1]] * len(future_years))
     adjusted_forecast = future_baseline_forecast + total_net_adjust_kwh
 
     forecast_df = pd.DataFrame({
@@ -419,12 +471,17 @@ elif menu == "⚡ Energy Forecast":
     forecast_df["saving_cost_rm"] = forecast_df["baseline_cost_rm"] - forecast_df["adjusted_cost_rm"]
     forecast_df["saving_co2_kg"] = forecast_df["baseline_co2_kg"] - forecast_df["adjusted_co2_kg"]
 
-    # Step 4: Visual comparisons & model accuracy (create figs used later)
+    # persist to session_state so switching menus won't lose them
+    st.session_state.df = df
+    st.session_state.df_factors = df_factors
+    st.session_state.forecast_df = forecast_df
+
+    # Step 4: Visual comparisons & model accuracy
     st.header("Step 4 — Visual comparisons & model accuracy")
-    col1, col2 = st.columns([2,1])
+    col1, col2 = st.columns([2, 1])
     with col1:
         st.subheader("Baseline (historical)")
-        fig_baseline = px.line(df, x="year", y="consumption", markers=True, title="Historical Baseline kWh", labels={"consumption":"kWh"})
+        fig_baseline = px.line(df, x="year", y="consumption", markers=True, title="Historical Baseline kWh", labels={"consumption": "kWh"})
         st.plotly_chart(fig_baseline, use_container_width=True)
 
         st.subheader("Baseline vs Forecast (kWh)")
@@ -432,19 +489,19 @@ elif menu == "⚡ Energy Forecast":
             pd.DataFrame({"year": df["year"], "baseline": df["consumption"], "fitted": df["fitted"]}),
             pd.DataFrame({"year": forecast_df["year"], "baseline": forecast_df["baseline_consumption_kwh"], "fitted": forecast_df["adjusted_consumption_kwh"]})
         ], ignore_index=True)
-        fig_both = px.line(plot_all.sort_values("year"), x="year", y=["baseline","fitted"], markers=True, labels={"value":"kWh","variable":"Series"}, title="Baseline vs Forecast (kWh)")
+        fig_both = px.line(plot_all.sort_values("year"), x="year", y=["baseline", "fitted"], markers=True, labels={"value": "kWh", "variable": "Series"}, title="Baseline vs Forecast (kWh)")
         st.plotly_chart(fig_both, use_container_width=True)
 
         st.subheader("Future forecast (baseline vs adjusted)")
-        fig_future = px.line(forecast_df, x="year", y=["baseline_consumption_kwh","adjusted_consumption_kwh"], markers=True, labels={"value":"kWh","variable":"Series"}, title="Future Forecast (kWh)")
+        fig_future = px.line(forecast_df, x="year", y=["baseline_consumption_kwh", "adjusted_consumption_kwh"], markers=True, labels={"value": "kWh", "variable": "Series"}, title="Future Forecast (kWh)")
         st.plotly_chart(fig_future, use_container_width=True)
 
         st.subheader("Cost trend (RM) — forecast period")
-        fig_cost = px.bar(forecast_df, x="year", y=["baseline_cost_rm","adjusted_cost_rm"], barmode="group", title="Cost Trend (RM)")
+        fig_cost = px.bar(forecast_df, x="year", y=["baseline_cost_rm", "adjusted_cost_rm"], barmode="group", title="Cost Trend (RM)")
         st.plotly_chart(fig_cost, use_container_width=True)
 
         st.subheader("CO₂ trend (kg) — forecast period")
-        fig_co2 = px.bar(forecast_df, x="year", y=["baseline_co2_kg","adjusted_co2_kg"], barmode="group", title="CO₂ Trend (kg)")
+        fig_co2 = px.bar(forecast_df, x="year", y=["baseline_co2_kg", "adjusted_co2_kg"], barmode="group", title="CO₂ Trend (kg)")
         st.plotly_chart(fig_co2, use_container_width=True)
 
     with col2:
@@ -473,16 +530,16 @@ elif menu == "⚡ Energy Forecast":
     # Step 5: Forecast tables
     st.header("Step 5 — Forecast tables")
     st.subheader("Historical (baseline)")
-    st.dataframe(df[["year","consumption","baseline_cost"]].rename(columns={"consumption":"consumption_kwh","baseline_cost":"baseline_cost_rm"}))
+    st.dataframe(df[["year", "consumption", "baseline_cost"]].rename(columns={"consumption": "consumption_kwh", "baseline_cost": "baseline_cost_rm"}))
     st.subheader("Forecast results")
     st.dataframe(forecast_df.style.format({
-        "baseline_consumption_kwh":"{:.0f}",
-        "adjusted_consumption_kwh":"{:.0f}",
-        "baseline_cost_rm":"{:.2f}",
-        "adjusted_cost_rm":"{:.2f}",
-        "saving_kwh":"{:.0f}",
-        "saving_cost_rm":"{:.2f}",
-        "saving_co2_kg":"{:.0f}"
+        "baseline_consumption_kwh": "{:.0f}",
+        "adjusted_consumption_kwh": "{:.0f}",
+        "baseline_cost_rm": "{:.2f}",
+        "adjusted_cost_rm": "{:.2f}",
+        "saving_kwh": "{:.0f}",
+        "saving_cost_rm": "{:.2f}",
+        "saving_co2_kg": "{:.0f}"
     }))
 
     # Step 6: Export & (optional) Save to DB
@@ -506,8 +563,8 @@ elif menu == "⚡ Energy Forecast":
     ]
 
     table_blocks = [
-        ("Historical (baseline)", df[["year","consumption","baseline_cost"]].rename(columns={"consumption":"consumption_kwh","baseline_cost":"baseline_cost_rm"})),
-        ("Factors (kWh/year)", df_factors[["device","units","hours_per_year","action","kwh_per_year"]]),
+        ("Historical (baseline)", df[["year", "consumption", "baseline_cost"]].rename(columns={"consumption": "consumption_kwh", "baseline_cost": "baseline_cost_rm"})),
+        ("Factors (kWh/year)", df_factors[["device", "units", "hours_per_year", "action", "kwh_per_year"]]),
         ("Forecast results", forecast_df)
     ]
 
@@ -515,7 +572,15 @@ elif menu == "⚡ Energy Forecast":
     if REPORTLAB_AVAILABLE:
         pdf_bytes = make_pdf_bytes("SMART ENERGY FORECASTING REPORT", summary_lines, table_blocks, image_bytes_list=images)
     if pdf_bytes:
-        st.download_button("📄 Download formal PDF report", data=pdf_bytes, file_name="energy_forecast_report.pdf", mime="application/pdf")
+        # save pdf to session history and provide download
+        filename = f"energy_forecast_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
+        # store in history
+        st.session_state.report_history.append({
+            "filename": filename,
+            "bytes": pdf_bytes,
+            "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        })
+        st.download_button("📄 Download formal PDF report", data=pdf_bytes, file_name=filename, mime="application/pdf")
     else:
         st.info("PDF export not available (reportlab not installed). Excel export available.")
 
@@ -526,7 +591,7 @@ elif menu == "⚡ Energy Forecast":
         st.info("MySQL support is not installed in this environment. Install 'mysql-connector-python' on the host to enable DB features.")
     else:
         st.markdown("Set DB credentials in Settings → Database (host, port, user, password, database). Then test connection and press 'Save to DB'.")
-        colA, colB = st.columns([1,1])
+        colA, colB = st.columns([1, 1])
         with colA:
             if st.button("Test DB connection"):
                 try:
@@ -561,23 +626,33 @@ elif menu == "💡 Device Management":
         d_note = st.text_input("Note", value="")
         submitted = st.form_submit_button("Add device")
         if submitted and d_name:
-            st.session_state.devices.append({"name":d_name,"watt":d_watt,"note":d_note})
+            st.session_state.devices.append({"name": d_name, "watt": d_watt, "note": d_note})
             st.success("Device added.")
     if st.session_state.devices:
         st.table(pd.DataFrame(st.session_state.devices))
 
 # -------------------------
-# Reports
+# Reports (history of PDFs)
 # -------------------------
 elif menu == "📊 Reports":
     st.title("📊 Reports")
-    st.markdown("Saved exports appear in browser downloads. Use Excel/PDF export on Energy Forecast screen.")
+    st.markdown("PDF reports you generated are listed below. Click 'Download' to retrieve them again.")
+    if not st.session_state.report_history:
+        st.info("No PDF reports generated yet. Generate a PDF from Energy Forecast → Step 6.")
+    else:
+        # build table and download buttons
+        for idx, r in enumerate(reversed(st.session_state.report_history)):
+            st.markdown(f"**{r['filename']}** — generated at {r['generated_at']}")
+            st.download_button(f"⬇️ Download {r['filename']}", data=r["bytes"], file_name=r["filename"], mime="application/pdf", key=f"dl_{idx}")
 
 # -------------------------
 # Settings (Theme + DB)
 # -------------------------
 elif menu == "⚙️ Settings":
     st.title("⚙️ Settings — Appearance & Database")
+    st.markdown("Theme and Database configuration. Values are stored in session (will persist while app runs).")
+
+    # Theme
     choice = st.radio("Background / Theme:", ["Dark (default)", "Light", "Custom image URL"])
     if choice == "Dark (default)":
         st.session_state.bg_mode = "Dark"
@@ -594,7 +669,7 @@ elif menu == "⚙️ Settings":
         st.markdown(light_style, unsafe_allow_html=True)
         st.success("Applied Light theme.")
     else:
-        img_url = st.text_input("Enter a full image URL to use as background:")
+        img_url = st.text_input("Enter a full image URL to use as background:", value="")
         if img_url:
             custom_style = f"""
             <style>
@@ -606,22 +681,24 @@ elif menu == "⚙️ Settings":
             </style>
             """
             st.markdown(custom_style, unsafe_allow_html=True)
+            st.session_state.bg_mode = "Custom"
             st.success("Applied custom background image.")
 
     st.markdown("---")
     st.subheader("Database configuration (optional)")
-    st.markdown("Enter MySQL connection details here (or set env vars DB_HOST, DB_USER, DB_PASSWORD, DB_DATABASE, DB_PORT).")
-    db_host = st.text_input("DB host", value=st.session_state.get("db_host",""))
-    db_port = st.text_input("DB port", value=str(st.session_state.get("db_port","3306")))
-    db_user = st.text_input("DB user", value=st.session_state.get("db_user",""))
-    db_password = st.text_input("DB password", value=st.session_state.get("db_password",""), type="password")
-    db_database = st.text_input("DB database", value=st.session_state.get("db_database",""))
+    st.markdown("Defaults point to your Railway proxy. Enter your Railway DB password here or set env var `RAILWAY_DB_PASSWORD` on the host.")
+
+    db_host = st.text_input("DB host", value=st.session_state.get("db_host", ""))
+    db_port = st.text_input("DB port", value=str(st.session_state.get("db_port", 55398)))
+    db_user = st.text_input("DB user", value=st.session_state.get("db_user", "root"))
+    db_password = st.text_input("DB password", value=st.session_state.get("db_password", ""), type="password")
+    db_database = st.text_input("DB database", value=st.session_state.get("db_database", "railway"))
     if st.button("Save DB settings to session"):
         st.session_state["db_host"] = db_host.strip()
         try:
             st.session_state["db_port"] = int(db_port)
         except Exception:
-            st.session_state["db_port"] = 3306
+            st.session_state["db_port"] = 55398
         st.session_state["db_user"] = db_user.strip()
         st.session_state["db_password"] = db_password
         st.session_state["db_database"] = db_database.strip()
@@ -640,7 +717,7 @@ elif menu == "❓ Help & About":
     Developed for forecasting and scenario comparison of energy consumption, cost and CO₂.
 
     **Support / Report issues:**  
-    📧 **Email:** chikaenergyforecast@gmail.com
+    📧 chikaenergyforecast@gmail.com
 
     Note: This app uses offline historical data you upload or enter manually — no hardware (IoT) is required.
     """)
