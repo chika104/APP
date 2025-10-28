@@ -321,8 +321,10 @@ elif menu == "⚡ Energy Forecast":
     input_mode = st.radio("Input method:", ("Upload CSV", "Manual Entry"))
 
     if input_mode == "Upload CSV":
-            uploaded = st.file_uploader("Upload CSV or Excel (needs 'year', 'consumption' and optional 'CO2' column)", type=["csv", "xlsx"])
-
+        uploaded = st.file_uploader(
+        "Upload CSV or Excel (needs 'year', 'consumption' and optional 'CO2' column)",
+        type=["csv", "xlsx"]
+    )
     if uploaded:
         try:
             if str(uploaded.name).lower().endswith(".csv"):
@@ -334,19 +336,20 @@ elif menu == "⚡ Energy Forecast":
             st.stop()
         df_raw = normalize_cols(df_raw)
         
-        # find columns
+        # Cari column
         year_candidates = [c for c in df_raw.columns if "year" in c]
         cons_candidates = [c for c in df_raw.columns if any(k in c for k in ["consum", "kwh", "energy"])]
-        co2_candidates  = [c for c in df_raw.columns if any(k in c for k in ["co2", "carbon", "emission"])]
-
+        co2_candidates = [c for c in df_raw.columns if "co2" in c]
+        
         if not year_candidates or not cons_candidates:
             st.error("CSV must contain 'year' and a consumption column (e.g. 'consumption' or 'kwh').")
             st.stop()
+        
         year_col = year_candidates[0]
         cons_col = cons_candidates[0]
         co2_col = co2_candidates[0] if co2_candidates else None
 
-        # coerce to numeric and drop invalid
+        # Coerce numeric & drop invalid
         df_raw[year_col] = pd.to_numeric(df_raw[year_col], errors="coerce")
         df_raw[cons_col] = pd.to_numeric(df_raw[cons_col], errors="coerce")
         if co2_col:
@@ -358,22 +361,14 @@ elif menu == "⚡ Energy Forecast":
         if after < before:
             st.warning(f"{before - after} rows removed due to invalid year/consumption.")
 
+        # Build loaded df
         df_loaded = pd.DataFrame({
             "year": df_raw[year_col].astype(int),
-            "consumption": df_raw[cons_col]
+            "consumption": df_raw[cons_col],
+            "baseline_cost": np.nan,
+            "baseline_co2_kg": df_raw[co2_col] if co2_col else np.nan
         })
-
-        cost_cols = [c for c in df_raw.columns if "cost" in c]
-        df_loaded["baseline_cost"] = pd.to_numeric(df_raw[cost_cols[0]], errors="coerce") if cost_cols else np.nan
-
-        # optional CO2 column
-        if co2_col:
-            df_loaded["baseline_co2_kg"] = df_raw[co2_col]
-        else:
-            df_loaded["baseline_co2_kg"] = np.nan  # default nan kalau CSV tak ada
-
         st.session_state.df = df_loaded.sort_values("year").reset_index(drop=True)
-
 
     else:
         # Manual entry only if session df is empty
