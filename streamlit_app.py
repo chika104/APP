@@ -64,8 +64,8 @@ if "db_port" not in st.session_state:
 if "db_user" not in st.session_state:
     st.session_state.db_user = "root"
 if "db_password" not in st.session_state:
-    # try environment variable first, otherwise leave blank for user to fill in Settings
-    st.session_state.db_password = os.environ.get("polrwgDJZnGLaungxPtGkOTaduCuolEj", "")
+    # placeholder — user should replace in Settings or set RAILWAY_DB_PASSWORD env var
+    st.session_state.db_password = "<polrwgDJZnGLaungxPtGkOTaduCuolEj>"
 if "db_database" not in st.session_state:
     st.session_state.db_database = "railway"
 
@@ -79,6 +79,8 @@ if "forecast_df" not in st.session_state:
 if "report_history" not in st.session_state:
     # each entry: {"filename": ..., "bytes": ..., "generated_at": ...}
     st.session_state.report_history = []
+if "devices" not in st.session_state:
+    st.session_state.devices = []
 
 # -------------------------
 # Utility functions
@@ -387,12 +389,24 @@ elif menu == "⚡ Energy Forecast":
         with c1:
             dev_options = ["Lamp - LED", "Lamp - CFL", "Lamp - Fluorescent", "Computer", "Lab Equipment"]
             prev_dev = st.session_state.df_factors["device"].iloc[i] if i < len(st.session_state.df_factors) else "LED Lamp"
-            device = st.selectbox(f"Device type (factor {i+1})", options=dev_options, index=0 if prev_dev not in dev_options else dev_options.index(prev_dev.replace(" Lamp","")), key=f"dev_{i}")
+            # map prev_dev to selection index when possible
+            default_index = 0
+            try:
+                if prev_dev and "Lamp" in prev_dev:
+                    subtype = prev_dev.split()[0]
+                    # match Lamp - subtype
+                    opt = f"Lamp - {subtype}"
+                    default_index = dev_options.index(opt) if opt in dev_options else 0
+                else:
+                    default_index = dev_options.index(prev_dev.replace(" Lamp", "")) if prev_dev.replace(" Lamp", "") in dev_options else 0
+            except Exception:
+                default_index = 0
+            device = st.selectbox(f"Device type (factor {i+1})", options=dev_options, index=default_index, key=f"dev_{i}")
         with c2:
             prev_units = int(st.session_state.df_factors["units"].iloc[i]) if i < len(st.session_state.df_factors) else 0
             units = st.number_input(f"Units", min_value=0, value=prev_units, step=1, key=f"units_{i}")
         with c3:
-            prev_hours = int(st.session_state.df_factors["hours_per_year"].iloc[i]) if i < len(st.session_state.df_factors) else 0
+            prev_hours = int(st.session_state.df_factors["hours_per_year"].iloc(i)) if i < len(st.session_state.df_factors) else 0
             hours = st.number_input(f"Hours per YEAR", min_value=0, max_value=8760, value=prev_hours, step=1, key=f"hours_{i}")
         with c4:
             prev_action = st.session_state.df_factors["action"].iloc[i] if i < len(st.session_state.df_factors) else "Addition"
@@ -574,7 +588,6 @@ elif menu == "⚡ Energy Forecast":
     if pdf_bytes:
         # save pdf to session history and provide download
         filename = f"energy_forecast_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
-        # store in history
         st.session_state.report_history.append({
             "filename": filename,
             "bytes": pdf_bytes,
@@ -618,8 +631,6 @@ elif menu == "⚡ Energy Forecast":
 elif menu == "💡 Device Management":
     st.title("💡 Device Management")
     st.markdown("Add and manage device types used in forecasts.")
-    if "devices" not in st.session_state:
-        st.session_state.devices = []
     with st.form("add_device"):
         d_name = st.text_input("Device name (e.g. 'LED 10W')", value="")
         d_watt = st.number_input("Power (W)", min_value=0.0, value=10.0)
@@ -640,7 +651,7 @@ elif menu == "📊 Reports":
     if not st.session_state.report_history:
         st.info("No PDF reports generated yet. Generate a PDF from Energy Forecast → Step 6.")
     else:
-        # build table and download buttons
+        # show most recent first
         for idx, r in enumerate(reversed(st.session_state.report_history)):
             st.markdown(f"**{r['filename']}** — generated at {r['generated_at']}")
             st.download_button(f"⬇️ Download {r['filename']}", data=r["bytes"], file_name=r["filename"], mime="application/pdf", key=f"dl_{idx}")
@@ -688,10 +699,10 @@ elif menu == "⚙️ Settings":
     st.subheader("Database configuration (optional)")
     st.markdown("Defaults point to your Railway proxy. Enter your Railway DB password here or set env var `RAILWAY_DB_PASSWORD` on the host.")
 
-    db_host = st.text_input("DB host", value=st.session_state.get("db_host", ""))
+    db_host = st.text_input("DB host", value=st.session_state.get("db_host", "switchback.proxy.rlwy.net"))
     db_port = st.text_input("DB port", value=str(st.session_state.get("db_port", 55398)))
     db_user = st.text_input("DB user", value=st.session_state.get("db_user", "root"))
-    db_password = st.text_input("DB password", value=st.session_state.get("db_password", ""), type="password")
+    db_password = st.text_input("DB password", value=st.session_state.get("db_password", "<YOUR_RAILWAY_PASSWORD>"), type="password")
     db_database = st.text_input("DB database", value=st.session_state.get("db_database", "railway"))
     if st.button("Save DB settings to session"):
         st.session_state["db_host"] = db_host.strip()
