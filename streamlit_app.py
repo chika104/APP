@@ -4,7 +4,6 @@ import plotly.express as px
 import mysql.connector
 from datetime import datetime
 import base64
-import os
 
 # -----------------------------
 # DATABASE CONFIGURATION
@@ -72,7 +71,7 @@ st.markdown(page_bg, unsafe_allow_html=True)
 menu = st.sidebar.radio("📋 Menu", ["Dashboard", "Energy Forecast", "Upload Data", "Report"])
 
 # -----------------------------
-# SMART CSV PARSER
+# FIXED PARSER FOR YOUR CSV
 # -----------------------------
 def parse_monthly_two_row_header_csv(file):
     df_raw = pd.read_csv(file, header=[0, 1])
@@ -83,11 +82,10 @@ def parse_monthly_two_row_header_csv(file):
     # --- Cari kolum bulan ---
     month_col_candidates = [c for c in df_raw.columns if "MONTH" in c.upper()]
     if not month_col_candidates:
-        # fallback – maybe first column is month even if unnamed
+        st.warning(f"⚠️ No 'MONTH' column found. Using first column: {df_raw.columns[0]}")
         month_col_candidates = [df_raw.columns[0]]
-        st.warning(f"⚠️ No 'MONTH' column found. Using first column as month: {month_col_candidates[0]}")
-    month_col = month_col_candidates[0]
 
+    month_col = month_col_candidates[0]
     df_raw = df_raw.rename(columns={month_col: "MONTH"})
 
     df = pd.DataFrame()
@@ -109,11 +107,6 @@ def parse_monthly_two_row_header_csv(file):
                 "Cost_RM": pd.to_numeric(df_raw[cost_col], errors="coerce")
             })
             df = pd.concat([df, temp], ignore_index=True)
-
-    # --- Final cleaning ---
-    if "MONTH" not in df.columns:
-        st.error("❌ Could not find or rename a MONTH column. Please check your CSV header.")
-        st.stop()
 
     df["MONTH"] = df["MONTH"].astype(str).str.strip()
     df = df.dropna(subset=["kWh"])
@@ -180,7 +173,6 @@ elif menu == "Energy Forecast":
 
         total_kwh = df.groupby("YEAR")["kWh"].sum().reset_index()
         total_cost = df.groupby("YEAR")["Cost_RM"].sum().reset_index()
-
         merged = pd.merge(total_kwh, total_cost, on="YEAR")
         merged["CO2_Saving_kg"] = merged["kWh"] * 0.527
 
@@ -197,7 +189,6 @@ elif menu == "Energy Forecast":
 # -----------------------------
 elif menu == "Dashboard":
     st.title("📈 Energy Monitoring Dashboard")
-
     try:
         conn = mysql.connector.connect(**DB_CONFIG)
         df = pd.read_sql("SELECT * FROM forecast_history ORDER BY year", conn)
@@ -220,12 +211,12 @@ elif menu == "Dashboard":
 elif menu == "Report":
     st.title("📑 Forecast Reports")
 
-    st.write("Download last forecast result as PDF:")
     if st.button("📥 Download PDF"):
         filename = f"forecast_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
         with open(filename, "w") as f:
             f.write("Energy Forecast Report (placeholder)")
         save_report_to_db(filename)
+
         with open(filename, "rb") as f:
             b64 = base64.b64encode(f.read()).decode()
             href = f'<a href="data:application/pdf;base64,{b64}" download="{filename}">Click here to download PDF</a>'
