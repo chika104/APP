@@ -65,7 +65,7 @@ if "db_user" not in st.session_state:
     st.session_state.db_user = "root"
 if "db_password" not in st.session_state:
     # try environment variable first, otherwise leave blank for user to fill in Settings
-    st.session_state.db_password = os.environ.get("RAILWAY_DB_PASSWORD", "")
+    st.session_state.db_password = os.environ.get("polrwgDJZnGLaungxPtGkOTaduCuolEj", "")
 if "db_database" not in st.session_state:
     st.session_state.db_database = "railway"
 
