@@ -65,7 +65,7 @@ if "db_port" not in st.session_state:
 if "db_user" not in st.session_state:
     st.session_state.db_user = "root"
 if "db_password" not in st.session_state:
-    st.session_state.db_password = "<YOUR_RAILWAY_PASSWORD>"
+    st.session_state.db_password = "polrwgDJZnGLaungxPtGkOTaduCuolEj"
 if "db_database" not in st.session_state:
     st.session_state.db_database = "railway"
 
