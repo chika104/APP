@@ -13,7 +13,7 @@ DB_CONFIG = {
     "host": "switchback.proxy.rlwy.net",
     "port": 55398,
     "user": "root",
-    "password": "polrwgDJZnGLaungxPtGkOTaduCuolEj",
+    "password": "<YOUR_RAILWAY_PASSWORD>",
     "database": "railway"
 }
 
@@ -56,7 +56,6 @@ if "theme" not in st.session_state:
 if "forecast_data" not in st.session_state:
     st.session_state.forecast_data = None
 
-# Keep dark background permanently
 page_bg = """
 <style>
 [data-testid="stAppViewContainer"] {
@@ -70,24 +69,26 @@ page_bg = """
 """
 st.markdown(page_bg, unsafe_allow_html=True)
 
-# -----------------------------
-# SIDEBAR MENU
-# -----------------------------
 menu = st.sidebar.radio("📋 Menu", ["Dashboard", "Energy Forecast", "Upload Data", "Report"])
 
 # -----------------------------
-# UTILITY FUNCTIONS
+# SMART CSV PARSER
 # -----------------------------
 def parse_monthly_two_row_header_csv(file):
     df_raw = pd.read_csv(file, header=[0, 1])
     df_raw.columns = ['_'.join(map(str, col)).strip().replace(" ", "_") for col in df_raw.columns.values]
 
-    st.write("🧩 Columns detected in file:", list(df_raw.columns))
+    st.write("🧩 Columns detected:", list(df_raw.columns))
 
-    month_cols = [c for c in df_raw.columns if "MONTH" in c.upper()]
-    if not month_cols:
-        raise KeyError("No column containing 'MONTH' found in CSV header.")
-    month_col = month_cols[0]
+    # --- Cari kolum bulan ---
+    month_col_candidates = [c for c in df_raw.columns if "MONTH" in c.upper()]
+    if not month_col_candidates:
+        # fallback – maybe first column is month even if unnamed
+        month_col_candidates = [df_raw.columns[0]]
+        st.warning(f"⚠️ No 'MONTH' column found. Using first column as month: {month_col_candidates[0]}")
+    month_col = month_col_candidates[0]
+
+    df_raw = df_raw.rename(columns={month_col: "MONTH"})
 
     df = pd.DataFrame()
     for year in [2019, 2020, 2021, 2022, 2023]:
@@ -102,17 +103,25 @@ def parse_monthly_two_row_header_csv(file):
 
         if kwh_col and cost_col:
             temp = pd.DataFrame({
-                "MONTH": df_raw[month_col],
+                "MONTH": df_raw["MONTH"],
                 "YEAR": year,
                 "kWh": pd.to_numeric(df_raw[kwh_col], errors="coerce"),
                 "Cost_RM": pd.to_numeric(df_raw[cost_col], errors="coerce")
             })
             df = pd.concat([df, temp], ignore_index=True)
 
+    # --- Final cleaning ---
+    if "MONTH" not in df.columns:
+        st.error("❌ Could not find or rename a MONTH column. Please check your CSV header.")
+        st.stop()
+
     df["MONTH"] = df["MONTH"].astype(str).str.strip()
     df = df.dropna(subset=["kWh"])
     return df
 
+# -----------------------------
+# DATABASE SAVE HELPERS
+# -----------------------------
 def save_forecast_to_db(year, total_kwh, total_cost, co2_saving):
     try:
         conn = mysql.connector.connect(**DB_CONFIG)
@@ -142,20 +151,23 @@ def save_report_to_db(filename):
         st.warning(f"⚠️ DB save error: {e}")
 
 # -----------------------------
-# UPLOAD DATA PAGE
+# UPLOAD PAGE
 # -----------------------------
 if menu == "Upload Data":
     st.title("📤 Upload Energy Data (CSV)")
     uploaded_file = st.file_uploader("Upload CSV file", type=["csv"])
 
     if uploaded_file is not None:
-        df = parse_monthly_two_row_header_csv(uploaded_file)
-        st.session_state.forecast_data = df
-        st.success("✅ Dataset successfully loaded and stored in session.")
-        st.dataframe(df.head())
+        try:
+            df = parse_monthly_two_row_header_csv(uploaded_file)
+            st.session_state.forecast_data = df
+            st.success("✅ Dataset successfully loaded.")
+            st.dataframe(df.head())
+        except Exception as e:
+            st.error(f"Error reading CSV: {e}")
 
 # -----------------------------
-# ENERGY FORECAST PAGE
+# FORECAST PAGE
 # -----------------------------
 elif menu == "Energy Forecast":
     st.title("⚡ Energy Forecast")
