@@ -321,7 +321,7 @@ elif menu == "⚡ Energy Forecast":
     input_mode = st.radio("Input method:", ("Upload CSV", "Manual Entry"))
 
     if input_mode == "Upload CSV":
-        uploaded = st.file_uploader("Upload CSV or Excel (needs 'year', 'consumption' and optional 'CO2' column)", type=["csv", "xlsx"])
+            uploaded = st.file_uploader("Upload CSV or Excel (needs 'year', 'consumption' and optional 'CO2' column)", type=["csv", "xlsx"])
 
     if uploaded:
         try:
