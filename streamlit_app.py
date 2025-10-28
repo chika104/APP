@@ -1,108 +1,227 @@
+# streamlit_app.py (updated for monthly forecast)
+import os
+import io
+from datetime import datetime
+
 import streamlit as st
 import pandas as pd
-import matplotlib.pyplot as plt
+import numpy as np
+import plotly.express as px
 
-st.set_page_config(page_title="Energy Data Dashboard", layout="wide")
+from sklearn.linear_model import LinearRegression
+from sklearn.metrics import r2_score
 
-st.title("⚡ Monthly Energy Usage Dashboard")
-st.markdown("Upload your monthly energy usage CSV (with multi-row headers).")
+# Optional PDF support
+REPORTLAB_AVAILABLE = False
+try:
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image as RLImage
+    from reportlab.lib.styles import getSampleStyleSheet
+    from reportlab.lib import colors
+    from reportlab.lib.pagesizes import A4
+    REPORTLAB_AVAILABLE = True
+except Exception:
+    REPORTLAB_AVAILABLE = False
 
-# -------------------------------
-# CSV PARSER FUNCTION (FIXED)
-# -------------------------------
-def parse_monthly_two_row_header_csv(file):
-    try:
-        df_raw = pd.read_csv(file, header=[0, 1])
-    except Exception:
-        # fallback if only single header
-        df_raw = pd.read_csv(file, header=0)
-    df_raw.columns = [
-        "_".join(map(str, col)).strip().replace(" ", "_") for col in df_raw.columns.values
-    ]
+# Plotly -> PNG support for embedding in PDF
+PLOTLY_IMG_OK = False
+try:
+    import plotly.io as pio
+    pio.kaleido.scope.default_format = "png"
+    PLOTLY_IMG_OK = True
+except Exception:
+    PLOTLY_IMG_OK = False
 
-    st.write("🧩 Columns detected:\n", list(df_raw.columns))
+# MySQL connector
+MYSQL_AVAILABLE = True
+try:
+    import mysql.connector
+    from mysql.connector import errorcode
+except Exception:
+    MYSQL_AVAILABLE = False
 
-    # --- Identify the MONTH column more flexibly ---
-    month_col_candidates = [
-        c for c in df_raw.columns if "MONTH" in c.upper() or "BULAN" in c.upper()
-    ]
-    if not month_col_candidates:
-        st.warning(f"⚠️ No 'MONTH' column found — using first column: {df_raw.columns[0]}")
-        month_col_candidates = [df_raw.columns[0]]
+EXCEL_ENGINE = "xlsxwriter"
 
-    month_col = month_col_candidates[0]
-    df_raw = df_raw.rename(columns={month_col: "MONTH"})
+# -------------------------
+# Session defaults and theme persistence
+# -------------------------
+if "bg_mode" not in st.session_state:
+    st.session_state.bg_mode = "Dark"
+if "bg_image_url" not in st.session_state:
+    st.session_state.bg_image_url = ""
+if "df" not in st.session_state:
+    st.session_state.df = pd.DataFrame()
+if "df_factors" not in st.session_state:
+    st.session_state.df_factors = pd.DataFrame()
+if "forecast_df" not in st.session_state:
+    st.session_state.forecast_df = pd.DataFrame()
+if "report_history" not in st.session_state:
+    st.session_state.report_history = []
+if "devices" not in st.session_state:
+    st.session_state.devices = []
 
-    # --- Extract data for each year ---
-    df = pd.DataFrame()
-    for year in [2019, 2020, 2021, 2022, 2023]:
-        kwh_col = None
-        cost_col = None
-
-        for c in df_raw.columns:
-            if str(year) in c and "KWH" in c.upper() and "RM" not in c.upper():
-                kwh_col = c
-            if str(year) in c and ("RM(TOTAL)" in c.upper() or "RMTOTAL" in c.upper()):
-                cost_col = c
-
-        if kwh_col and cost_col:
-            temp = pd.DataFrame({
-                "MONTH": df_raw["MONTH"],
-                "YEAR": year,
-                "kWh": pd.to_numeric(df_raw[kwh_col], errors="coerce"),
-                "Cost_RM": pd.to_numeric(df_raw[cost_col], errors="coerce")
-            })
-            df = pd.concat([df, temp], ignore_index=True)
-
-    df["MONTH"] = df["MONTH"].astype(str).str.strip()
-    df = df.dropna(subset=["kWh"])
+# -------------------------
+# Utility functions
+# -------------------------
+def normalize_cols(df):
+    df = df.copy()
+    df.columns = [str(c).strip().lower().replace(" ", "_") for c in df.columns]
     return df
 
+def df_to_excel_bytes(dfs: dict):
+    out = io.BytesIO()
+    with pd.ExcelWriter(out, engine=EXCEL_ENGINE) as writer:
+        for name, df in dfs.items():
+            df.to_excel(writer, sheet_name=name[:31], index=False)
+    return out.getvalue()
 
-# -------------------------------
-# MAIN APP
-# -------------------------------
-uploaded_file = st.file_uploader("📁 Upload CSV file", type=["csv"])
+def try_get_plot_png(fig):
+    if PLOTLY_IMG_OK:
+        try:
+            return fig.to_image(format="png", width=900, height=540, scale=2)
+        except Exception:
+            return None
+    return None
 
-if uploaded_file is not None:
+def make_pdf_bytes(title_text, summary_lines, table_blocks, image_bytes_list=None, logo_bytes=None):
+    if not REPORTLAB_AVAILABLE:
+        return None
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=A4)
+    styles = getSampleStyleSheet()
+    elements = []
+    if logo_bytes:
+        try:
+            logo_buf = io.BytesIO(logo_bytes)
+            img = RLImage(logo_buf, width=80, height=80)
+            elements.append(img)
+        except Exception:
+            pass
+    elements.append(Paragraph(title_text, styles["Title"]))
+    elements.append(Spacer(1, 8))
+    elements.append(Paragraph(f"Generated on {datetime.now().strftime('%d %B %Y %H:%M')}", styles["Normal"]))
+    elements.append(Spacer(1, 12))
+    for line in summary_lines:
+        elements.append(Paragraph(line, styles["Normal"]))
+    elements.append(Spacer(1, 12))
+    if image_bytes_list:
+        for im_bytes in image_bytes_list:
+            try:
+                imgbuf = io.BytesIO(im_bytes)
+                img = RLImage(imgbuf, width=450, height=280)
+                elements.append(img)
+                elements.append(Spacer(1, 8))
+            except Exception:
+                pass
+    for title, df in table_blocks:
+        elements.append(Spacer(1, 8))
+        elements.append(Paragraph(f"<b>{title}</b>", styles["Heading3"]))
+        elements.append(Spacer(1, 6))
+        data = [list(df.columns)] + df.fillna("").astype(str).values.tolist()
+        tbl = Table(data, repeatRows=1)
+        tbl.setStyle(TableStyle([
+            ("BACKGROUND", (0,0), (-1,0), colors.darkblue),
+            ("TEXTCOLOR", (0,0), (-1,0), colors.white),
+            ("GRID", (0,0), (-1,-1), 0.25, colors.grey),
+        ]))
+        elements.append(tbl)
     try:
-        df = parse_monthly_two_row_header_csv(uploaded_file)
+        doc.build(elements)
+        return buf.getvalue()
+    except Exception:
+        return None
 
-        st.success("✅ File successfully processed!")
-        st.dataframe(df)
+# -------------------------
+# Streamlit page config
+# -------------------------
+st.set_page_config(page_title="Smart Energy Forecasting", layout="wide")
 
-        # --- Plotting ---
-        st.subheader("📊 Monthly Energy Usage (kWh)")
-        fig, ax = plt.subplots(figsize=(10, 5))
-        for year in df["YEAR"].unique():
-            subset = df[df["YEAR"] == year]
-            ax.plot(subset["MONTH"], subset["kWh"], marker="o", label=str(year))
-        ax.set_xlabel("Month")
-        ax.set_ylabel("Energy Usage (kWh)")
-        ax.set_title("Monthly Energy Usage by Year")
-        ax.legend()
-        plt.xticks(rotation=45)
-        st.pyplot(fig)
+# -------------------------
+# Sidebar navigation
+# -------------------------
+st.sidebar.title("🔹 Smart Energy Forecasting")
+menu = st.sidebar.radio("Navigate:", ["🏠 Dashboard", "⚡ Energy Forecast", "💡 Device Management",
+                                     "📊 Reports", "⚙️ Settings", "❓ Help & About"])
 
-        # --- Cost Chart ---
-        st.subheader("💰 Monthly Energy Cost (RM)")
-        fig2, ax2 = plt.subplots(figsize=(10, 5))
-        for year in df["YEAR"].unique():
-            subset = df[df["YEAR"] == year]
-            ax2.plot(subset["MONTH"], subset["Cost_RM"], marker="o", label=str(year))
-        ax2.set_xlabel("Month")
-        ax2.set_ylabel("Cost (RM)")
-        ax2.set_title("Monthly Energy Cost by Year")
-        ax2.legend()
-        plt.xticks(rotation=45)
-        st.pyplot(fig2)
+# -------------------------
+# ENERGY FORECAST (updated for monthly forecast)
+# -------------------------
+if menu == "⚡ Energy Forecast":
+    st.title("⚡ Energy Forecast")
 
-        # --- Summary ---
-        st.subheader("📈 Yearly Summary")
-        summary = df.groupby("YEAR")[["kWh", "Cost_RM"]].sum().reset_index()
-        st.dataframe(summary)
+    # Step 1: Input CSV
+    uploaded = st.file_uploader("Upload CSV with 'MONTH', 'YEAR', 'kWh'", type=["csv", "xlsx"])
+    if uploaded:
+        if str(uploaded.name).lower().endswith(".csv"):
+            df_raw = pd.read_csv(uploaded)
+        else:
+            df_raw = pd.read_excel(uploaded)
+        df_raw = normalize_cols(df_raw)
 
-    except Exception as e:
-        st.error(f"Error reading CSV: {e}")
-else:
-    st.info("👆 Please upload a CSV file to begin.")
+        # Pastikan ada kolum 'month', 'year', 'kwh'
+        for c in ['month','year','kwh']:
+            if c not in df_raw.columns:
+                st.error(f"CSV mesti ada kolum '{c}'")
+                st.stop()
+        df_raw['year'] = pd.to_numeric(df_raw['year'], errors='coerce')
+        df_raw['kwh'] = pd.to_numeric(df_raw['kwh'], errors='coerce')
+        df_raw = df_raw.dropna(subset=['year','kwh'])
+        df_raw['month'] = df_raw['month'].astype(str)
+        st.session_state.df = df_raw
+
+    df = st.session_state.df.copy()
+    if df.empty:
+        st.warning("Tiada data tersedia")
+        st.stop()
+
+    # Step 2: Tambah month_num & year_month
+    month_map = {"January":1,"February":2,"March":3,"April":4,"May":5,"June":6,
+                 "July":7,"August":8,"September":9,"October":10,"November":11,"December":12}
+    df['month_num'] = df['month'].map(month_map)
+    df['year_month'] = df['year'] + (df['month_num']-1)/12
+
+    st.subheader("Data Input")
+    st.dataframe(df[['year','month','kwh']])
+
+    # Step 3: Linear Regression (monthly)
+    model = LinearRegression()
+    X_hist = df[['year_month']].values
+    y_hist = df['kwh'].values
+    model.fit(X_hist, y_hist)
+    df['fitted'] = model.predict(X_hist)
+    r2 = r2_score(y_hist, df['fitted'])
+
+    # Step 4: Forecast bulanan
+    last_year = int(df['year'].max())
+    last_month = int(df[df['year']==last_year]['month_num'].max())
+    n_months_forecast = st.number_input("Forecast months ahead", min_value=1, max_value=36, value=12)
+
+    future_years = []
+    future_months = []
+    for i in range(1, n_months_forecast+1):
+        month = (last_month + i - 1) % 12 + 1
+        year = last_year + (last_month + i - 1)//12
+        future_years.append(year)
+        future_months.append(month)
+
+    future_year_month = [y + (m-1)/12 for y,m in zip(future_years, future_months)]
+    future_X = np.array(future_year_month).reshape(-1,1)
+    future_baseline_forecast = model.predict(future_X)
+
+    forecast_df = pd.DataFrame({
+        'year': future_years,
+        'month_num': future_months,
+        'baseline_consumption_kwh': future_baseline_forecast
+    })
+
+    # Tariff & CO2
+    tariff = st.number_input("Electricity tariff (RM/kWh)", min_value=0.0, value=0.52)
+    co2_factor = st.number_input("CO2 factor (kg/kWh)", min_value=0.0, value=0.75)
+
+    forecast_df['baseline_cost_rm'] = forecast_df['baseline_consumption_kwh']*tariff
+    forecast_df['baseline_co2_kg'] = forecast_df['baseline_consumption_kwh']*co2_factor
+
+    st.subheader("Forecast Results")
+    st.dataframe(forecast_df)
+
+    # Simpan di session
+    st.session_state.forecast_df = forecast_df
