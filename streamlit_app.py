@@ -373,7 +373,7 @@ elif menu == "⚡ Energy Forecast":
             data.append({"year": int(y), "consumption": float(cons), "baseline_cost": float(cost) if cost>0 else np.nan})
         df = pd.DataFrame(data)
 
-    if df is None or df.empty:
+    if df ==  st.session_state.df.copy() :
         st.warning("Please upload or enter data to continue.")
         st.stop()
 
