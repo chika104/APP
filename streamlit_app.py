@@ -373,9 +373,14 @@ elif menu == "⚡ Energy Forecast":
             data.append({"year": int(y), "consumption": float(cons), "baseline_cost": float(cost) if cost>0 else np.nan})
         df = pd.DataFrame(data)
 
-    if df ==  st.session_state.df.copy() :
-        st.warning("Please upload or enter data to continue.")
-        st.stop()
+    # Ambil salinan session_state ke df
+df = st.session_state.df.copy()  # assignment yang benar
+
+# Cek apakah kosong
+if df.empty:
+    st.warning("No historical data available yet.")
+    st.stop()
+
 
     df["year"] = df["year"].astype(int)
     df["consumption"] = pd.to_numeric(df["consumption"], errors="coerce").fillna(0.0)
