@@ -379,7 +379,7 @@ df = st.session_state.df.copy()  # assignment yang benar
 # Cek apakah kosong
 if df.empty:
     st.warning("No historical data available yet.")
-    st.stop()
+    
 
 
     df["year"] = df["year"].astype(int)
