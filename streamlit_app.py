@@ -360,29 +360,31 @@ elif menu == "⚡ Energy Forecast":
             st.session_state.df = df_loaded.sort_values("year").reset_index(drop=True)
 
     else:
-        # Manual entry only if session df is empty
-        if st.session_state.df is None or st.session_state.df.empty:
-            rows = st.number_input("Number of historical rows:", min_value=1, max_value=20, value=5)
-            data = []
-            for i in range(int(rows)):
-                c1, c2, c3 = st.columns([1, 1, 1])
-                with c1:
-                    y = st.number_input(f"Year {i+1}", 2000, 2100, 2020 + i, key=f"year_{i}")
-                with c2:
-                    cons = st.number_input(f"Consumption kWh ({y})", 0.0, 10_000_000.0, 10000.0, key=f"cons_{i}")
-                with c3:
-                    cost = st.number_input(f"Baseline cost RM ({y}) (optional)", 0.0, 10_000_000.0, 0.0, key=f"cost_{i}")
-                data.append({"year": int(y), "consumption": float(cons), "baseline_cost": float(cost) if cost > 0 else np.nan})
-            st.session_state.df = pd.DataFrame(data).sort_values("year").reset_index(drop=True)
+        rows = st.number_input("Number of historical rows:", min_value=1, max_value=20, value=5)
+        data = []
+        for i in range(int(rows)):
+            c1,c2,c3 = st.columns([1,1,1])
+            with c1:
+                y = st.number_input(f"Year {i+1}", 2000, 2100, 2020+i, key=f"year_{i}")
+            with c2:
+                cons = st.number_input(f"Consumption kWh ({y})", 0.0, 10_000_000.0, 10000.0, key=f"cons_{i}")
+            with c3:
+                cost = st.number_input(f"Baseline cost RM ({y}) (optional)", 0.0, 10_000_000.0, 0.0, key=f"cost_{i}")
+            data.append({"year": int(y), "consumption": float(cons), "baseline_cost": float(cost) if cost>0 else np.nan})
+        df = pd.DataFrame(data)
 
-    # show loaded data
-    if st.session_state.df is None or st.session_state.df.empty:
-        st.warning("No historical data available yet.")
+    if df is None or df.empty:
+        st.warning("Please upload or enter data to continue.")
         st.stop()
-    df = st.session_state.df.copy()
+
+    df["year"] = df["year"].astype(int)
+    df["consumption"] = pd.to_numeric(df["consumption"], errors="coerce").fillna(0.0)
+    if "baseline_cost" not in df.columns:
+        df["baseline_cost"] = np.nan
+    df["baseline_cost"] = pd.to_numeric(df["baseline_cost"], errors="coerce")
+    df = df.sort_values("year").reset_index(drop=True)
     st.subheader("Loaded baseline data")
     st.dataframe(df)
-
     # Step 2: Factors
     st.header("Step 2 — Adjustment factors")
     st.markdown("Enter device-level adjustments. Hours are per YEAR.")
